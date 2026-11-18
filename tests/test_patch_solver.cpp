@@ -36,6 +36,8 @@ int main() {
     assert(patch.quality.max_boundary_error < 1e-13);
     assert(patch.quality.worst_edge_aspect_ratio < 1.0+1e-12);
     assert(patch.quality.mean_abs_orthogonality < 1e-12);
+    assert(patch.quality.minimum_scaled_jacobian > 1.0-1e-12);
+    assert(patch.quality.max_diagonal_warpage_deg < 1e-6);
     assert(std::fabs(patch.quality.minimum_face_area - 1.0/16) < 1e-12);
     for (const auto &q : patch.mesh.quads) {
       for (auto id : q) assert(id < patch.mesh.vertices.size());
@@ -73,6 +75,83 @@ int main() {
     const auto &top_middle=patch.mesh.vertices[10*11+5];
     assert(bottom_middle.y < -0.11);
     assert(top_middle.y > 1.13);
+  }
+  {
+    // Regression: formerly one straight segment silently erased a sharp
+    // painted guide vertex but still claimed zero boundary deviation.
+    auto sharp=unit_square();
+    sharp.bottom={{0,0,0},{0.5,-0.2,0},{1,0,0}};
+    QuadPatchOptions strict;
+    strict.u_segments=1; strict.v_segments=1;
+    bool insufficient=false;
+    try { solve_quad_patch(sharp,strict); }
+    catch (const std::invalid_argument &) { insufficient=true; }
+    assert(insufficient);
+
+    strict.u_segments=2;
+    const auto preserved=solve_quad_patch(sharp,strict);
+    assert(preserved.mesh.quads.size()==2);
+    assert(preserved.mesh.vertices[1].x==0.5);
+    assert(preserved.mesh.vertices[1].y==-0.2);
+    assert(preserved.quality.max_boundary_error < 1e-12);
+
+    // Approximation is opt-in and reports source-to-output deviation.
+    strict.u_segments=1;
+    strict.preserve_boundary_vertices=false;
+    const auto approximated=solve_quad_patch(sharp,strict);
+    assert(approximated.mesh.quads.size()==1);
+    assert(std::fabs(approximated.quality.max_boundary_error-0.2) < 1e-12);
+  }
+  {
+    // Hard constraints are honored even for an asymmetric arc-length layout:
+    // extra divisions must never skip an input knot.
+    auto uneven=unit_square();
+    uneven.bottom={{0,0,0},{0.03,-0.04,0},{0.7,-0.1,0},{1,0,0}};
+    QuadPatchOptions options;
+    options.u_segments=7; options.v_segments=4;
+    const auto patch=solve_quad_patch(uneven,options);
+    bool found_first=false, found_second=false;
+    for (std::size_t i=0;i<=options.u_segments;++i) {
+      const auto p=patch.mesh.vertices[i];
+      found_first |= (p.x==0.03 && p.y==-0.04);
+      found_second |= (p.x==0.7 && p.y==-0.1);
+    }
+    assert(found_first && found_second);
+    assert(patch.quality.max_boundary_error < 1e-12);
+  }
+  {
+    // Non-planarity must be visible in the metric even if faces stay valid.
+    auto twisted=unit_square();
+    twisted.right.back().z=0.2;
+    twisted.top.back().z=0.2;
+    QuadPatchOptions options;
+    options.u_segments=1; options.v_segments=1;
+    const auto patch=solve_quad_patch(twisted,options);
+    assert(patch.quality.max_diagonal_warpage_deg > 1.0);
+    assert(patch.quality.minimum_scaled_jacobian > 0.0);
+  }
+  {
+    // Bow-tie with crossing edges is not a valid quad.
+    QuadPatchBoundary crossing{
+      {{0,0,0},{1,1,0}}, {{1,1,0},{1,0,0}},
+      {{0,1,0},{1,0,0}}, {{0,0,0},{0,1,0}}};
+    QuadPatchOptions options;
+    options.u_segments=1; options.v_segments=1;
+    bool invalid=false;
+    try { solve_quad_patch(crossing,options); }
+    catch (const std::runtime_error &) { invalid=true; }
+    assert(invalid);
+  }
+  {
+    // Identical consecutive guide points must fail rather than produce NaNs.
+    auto degenerate=unit_square();
+    degenerate.bottom={{0,0,0},{0,0,0},{1,0,0}};
+    QuadPatchOptions options;
+    options.u_segments=2; options.v_segments=1;
+    bool invalid=false;
+    try { solve_quad_patch(degenerate,options); }
+    catch (const std::invalid_argument &) { invalid=true; }
+    assert(invalid);
   }
   {
     // Bridge to the existing Face Set/border guide extraction.
