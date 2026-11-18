@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "guidedquad/guide_graph.hpp"
+#include "guidedquad/quad_intersections.hpp"
 #include "guidedquad/patch_solver.hpp"
 #include "guidedquad/surface_projection.hpp"
 #include <cstdlib>
@@ -45,6 +46,41 @@ static TriangleMesh read_obj(const std::string &name) {
       std::string extra;
       if (in >> extra && extra[0] != '#') throw std::runtime_error("triangulate OBJ faces first");
       mesh.triangles.push_back(f);
+    }
+  }
+  return mesh;
+}
+
+static guidedquad::QuadPatchMesh read_quad_obj(const std::string &name) {
+  std::ifstream file(name);
+  if (!file) throw std::runtime_error("cannot open quad OBJ input");
+  guidedquad::QuadPatchMesh mesh;
+  std::string line;
+  while(std::getline(file,line)) {
+    std::istringstream in(line);
+    std::string tag;
+    in>>tag;
+    if(tag=="v") {
+      guidedquad::Vec3 p;
+      if(!(in>>p.x>>p.y>>p.z))throw std::runtime_error("invalid OBJ position");
+      mesh.vertices.push_back(p);
+    } else if(tag=="f") {
+      std::array<std::uint32_t,4> q{};
+      for(int i=0;i<4;++i) {
+        std::string token;
+        if(!(in>>token))throw std::runtime_error("check-quads requires only quad faces");
+        const std::string index_text=token.substr(0,token.find('/'));
+        std::size_t consumed=0;
+        const unsigned long long index=std::stoull(index_text,&consumed,10);
+        if(index_text.empty()||consumed!=index_text.size()||index==0||
+           index>std::numeric_limits<std::uint32_t>::max())
+          throw std::runtime_error("bad positive OBJ face index");
+        q[i]=static_cast<std::uint32_t>(index-1);
+      }
+      std::string extra;
+      if(in>>extra && extra[0]!='#')
+        throw std::runtime_error("non-quad OBJ face encountered");
+      mesh.quads.push_back(q);
     }
   }
   return mesh;
@@ -106,16 +142,30 @@ static void write_quads(const guidedquad::QuadPatchMesh &mesh,
 }
 
 int main(int argc, char **argv) {
-  if (argc < 4) {
+  if (argc < 3) {
     std::cerr << "Usage: guidedquad_cli facesets input.obj face_ids.txt output.obj\n"
               << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n"
               << "       guidedquad_cli patch-loop input.obj output.obj c0 c1 c2 c3 nu nv\n"
+              << "       guidedquad_cli check-quads quad_mesh.obj\n"
               << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength] [normal_dot] [max_distance]\n"
               << "Patch corners are four ordered indices in the extracted closed boundary path.\n";
     return 2;
   }
   try {
     const std::string mode(argv[1]);
+    if(mode=="check-quads") {
+      if(argc!=3)throw std::invalid_argument("check-quads takes exactly one quad OBJ");
+      const auto report=guidedquad::find_quad_self_intersections(read_quad_obj(argv[2]),16);
+      std::cout<<"Quad collision check: "<<report.pairs.size()<<" detected pair(s), "
+               <<report.bvh_pair_tests<<" BVH node-pair tests, "
+               <<report.candidate_quad_pairs<<" candidate quad pairs";
+      if(report.truncated)std::cout<<" (search stopped at report limit)";
+      std::cout<<'\n';
+      for(const auto &pair:report.pairs)
+        std::cerr<<"Colliding quads: "<<pair[0]<<" and "<<pair[1]<<" (zero-based)\n";
+      return report.pairs.empty()?0:3;
+    }
+    if(argc<4)throw std::invalid_argument("missing arguments for quad patch or guide extraction");
     const auto mesh = read_obj(argv[2]);
     if (mode == "patch-loop" || mode == "project-loop") {
       const bool projecting=(mode=="project-loop");
