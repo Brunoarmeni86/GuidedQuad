@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <numeric>
+#include <unordered_map>
 #include <utility>
 #include <stdexcept>
 #include <vector>
@@ -85,6 +87,7 @@ class SurfaceBvh {
     Id begin=0,count=0;
     Id left=0,right=0;
     bool leaf=false;
+    Id component=std::numeric_limits<Id>::max(); // mixed if unset
   };
   const TriangleMesh &mesh_;
   std::vector<Id> indices_;
@@ -92,7 +95,47 @@ class SurfaceBvh {
   std::vector<Vec3> centroids_;
   std::vector<Node> nodes_;
   std::vector<Vec3> face_normals_;
+  std::vector<Id> face_components_;
+  Id component_count_ = 0;
   std::uint32_t skipped_ = 0;
+
+  // Components are defined by triangle EDGE connectivity, not by similar
+  // coordinates or by touching only at one vertex. Unwelded scan shells stay
+  // separate even if geometrically coincident and normals agree.
+  void build_components() {
+    std::vector<Id> parent(mesh_.triangles.size());
+    std::iota(parent.begin(),parent.end(),Id{0});
+    const auto root=[&](Id id) {
+      while(parent[id]!=id) {
+        parent[id]=parent[parent[id]];
+        id=parent[id];
+      }
+      return id;
+    };
+    const auto join=[&](Id a,Id b) {
+      a=root(a); b=root(b);
+      if(a!=b)parent[std::max(a,b)]=std::min(a,b);
+    };
+    std::unordered_map<std::uint64_t,Id> first_edge_face;
+    first_edge_face.reserve(indices_.size()*3);
+    for(Id face:indices_) {
+      const auto &t=mesh_.triangles[face];
+      for(int k=0;k<3;++k) {
+        const Id a=std::min(t[k],t[(k+1)%3]);
+        const Id b=std::max(t[k],t[(k+1)%3]);
+        const std::uint64_t key=(std::uint64_t(a)<<32)|b;
+        const auto insertion=first_edge_face.emplace(key,face);
+        if(!insertion.second)join(face,insertion.first->second);
+      }
+    }
+    std::unordered_map<Id,Id> root_to_component;
+    for(Id face:indices_) {
+      const Id r=root(face);
+      const auto [it,inserted]=root_to_component.emplace(r,component_count_);
+      if(inserted)++component_count_;
+      face_components_[face]=it->second;
+    }
+  }
 
   Id build(Id first,Id end) {
     const Id node_index=static_cast<Id>(nodes_.size());
@@ -104,6 +147,12 @@ class SurfaceBvh {
       centroid_bounds.extend(centroids_[face]);
     }
     nodes_[node_index].box=bounds;
+    Id homogeneous=face_components_[indices_[first]];
+    for(Id i=first+1;i<end;++i)
+      if(face_components_[indices_[i]]!=homogeneous){
+        homogeneous=std::numeric_limits<Id>::max();break;
+      }
+    nodes_[node_index].component=homogeneous;
     if(end-first<=8) {
       nodes_[node_index].begin=first;
       nodes_[node_index].count=end-first;
@@ -128,13 +177,22 @@ class SurfaceBvh {
   }
 
   void find(Id n,Vec3 p,double &best,Vec3 &point,
-            Vec3 reference_normal,double min_dot,SurfaceProjectionStats &stats) const {
+            Vec3 reference_normal,double min_dot,Id desired_component,
+            SurfaceProjectionStats &stats) const {
     const Node &node=nodes_[n];
     ++stats.box_tests;
+    if(desired_component!=std::numeric_limits<Id>::max()&&
+       node.component!=std::numeric_limits<Id>::max()&&
+       node.component!=desired_component)return;
     if(node.box.dist2(p)>best)return;
     if(node.leaf) {
       for(Id i=node.begin;i<node.begin+node.count;++i){
         const Id face=indices_[i];
+        if(desired_component!=std::numeric_limits<Id>::max() &&
+           face_components_[face]!=desired_component){
+          ++stats.component_rejected_triangles;
+          continue;
+        }
         if(min_dot > -1.0 && dot(face_normals_[face],reference_normal)<min_dot) {
           ++stats.normal_rejected_triangles;
           continue;
@@ -151,11 +209,11 @@ class SurfaceBvh {
     const double dl=nodes_[node.left].box.dist2(p);
     const double dr=nodes_[node.right].box.dist2(p);
     if(dl<=dr) {
-      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,stats);
-      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
+      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,desired_component,stats);
+      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,desired_component,stats);
     } else {
-      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
-      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,stats);
+      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,desired_component,stats);
+      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,desired_component,stats);
     }
   }
 
@@ -171,6 +229,7 @@ class SurfaceBvh {
     triangle_boxes_.resize(surface.triangles.size());
     centroids_.resize(surface.triangles.size());
     face_normals_.resize(surface.triangles.size());
+    face_components_.resize(surface.triangles.size(),std::numeric_limits<Id>::max());
     for(Id i=0;i<surface.triangles.size();++i) {
       const auto &t=surface.triangles[i];
       if(t[0]>=surface.vertices.size()||t[1]>=surface.vertices.size()||
@@ -191,18 +250,20 @@ class SurfaceBvh {
       centroids_[i]=mul(add(add(a,b),c),1.0/3.0);
     }
     if(indices_.empty())throw std::invalid_argument("surface has no nondegenerate triangle");
+    build_components();
     nodes_.reserve(indices_.size()/4+16);
     build(0,static_cast<Id>(indices_.size()));
   }
   std::uint32_t skipped() const { return skipped_; }
+  Id connected_components() const { return component_count_; }
   std::uint32_t active_count() const { return static_cast<std::uint32_t>(indices_.size()); }
   Vec3 nearest(Vec3 p,Vec3 reference_normal,double min_dot,
-               SurfaceProjectionStats &stats) const {
+               Id desired_component,SurfaceProjectionStats &stats) const {
     if(!finite(p))throw std::invalid_argument("nearest query has invalid point");
     ++stats.closest_queries;
     double best=std::numeric_limits<double>::infinity();
     Vec3 closest{0,0,0};
-    find(0,p,best,closest,reference_normal,min_dot,stats);
+    find(0,p,best,closest,reference_normal,min_dot,desired_component,stats);
     if(!std::isfinite(best))
       throw std::runtime_error("no compatible triangle or numeric overflow in nearest query");
     return closest;
@@ -307,6 +368,10 @@ std::uint32_t PreparedSurfaceProjector::active_triangle_count() const {
   if(!impl_) throw std::logic_error("projector was moved from");
   return impl_->bvh.active_count();
 }
+std::uint32_t PreparedSurfaceProjector::connected_component_count() const {
+  if(!impl_) throw std::logic_error("projector was moved from");
+  return impl_->bvh.connected_components();
+}
 std::uint32_t PreparedSurfaceProjector::skipped_degenerate_triangles() const {
   if(!impl_) throw std::logic_error("projector was moved from");
   return impl_->bvh.skipped();
@@ -343,6 +408,10 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
     throw std::invalid_argument("projection iterations exceed CPU budget");
 
   const SurfaceBvh &bvh=impl_->bvh;
+  if(opts.source_component_id!=std::numeric_limits<Id>::max()&&
+     opts.source_component_id>=bvh.connected_components()) {
+    throw std::invalid_argument("requested source component does not exist");
+  }
   output.stats.skipped_degenerate_triangles=bvh.skipped();
   if(!interior)return output;
   std::vector<Vec3> original_normals;
@@ -363,7 +432,7 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
     const std::size_t idx=index(i,j,nu);
     targets[idx]=bvh.nearest(patch.vertices[idx],
         original_normals.empty()?no_normal:original_normals[idx],
-        opts.min_reference_normal_dot,output.stats);
+        opts.min_reference_normal_dot,opts.source_component_id,output.stats);
     initial_sum+=sqdist(patch.vertices[idx],targets[idx]);
   }
   output.stats.initial_rms_distance=std::sqrt(initial_sum/static_cast<double>(interior));
@@ -380,7 +449,7 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
       // geometry actually changes and the previous closest targets become stale.
       if(iter>0)targets[idx]=bvh.nearest(output.mesh.vertices[idx],
           original_normals.empty()?no_normal:original_normals[idx],
-          opts.min_reference_normal_dot,output.stats);
+          opts.min_reference_normal_dot,opts.source_component_id,output.stats);
       if(norm(sub(targets[idx],patch.vertices[idx]))>opts.max_projection_distance){
         // The radius is measured against the ORIGINAL grid, not the last
         // accepted position; consecutive iterations cannot drift across it.
@@ -429,7 +498,7 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
     const std::size_t idx=index(i,j,nu);
     const Vec3 q=bvh.nearest(output.mesh.vertices[idx],
         original_normals.empty()?no_normal:original_normals[idx],
-        opts.min_reference_normal_dot,output.stats);
+        opts.min_reference_normal_dot,opts.source_component_id,output.stats);
     final_sum+=sqdist(output.mesh.vertices[idx],q);
     const double moved=norm(sub(output.mesh.vertices[idx],patch.vertices[idx]));
     if(moved>1e-14)++output.stats.moved_vertices;

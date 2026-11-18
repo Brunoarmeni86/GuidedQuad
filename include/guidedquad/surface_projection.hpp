@@ -30,6 +30,10 @@ struct SurfaceProjectionOptions {
   // Validate nonadjacent quad collisions at input and on every candidate.
   // Default safe; disabling this avoids BVH rebuilds but removes a guarantee.
   bool reject_self_intersections = true;
+  // Optional connected source component (triangle edge connectivity).
+  // UINT32_MAX = no component filter (default). IDs assigned in source
+  // face order to nondegenerate connected components.
+  std::uint32_t source_component_id = std::numeric_limits<std::uint32_t>::max();
 };
 
 struct SurfaceProjectionStats {
@@ -37,6 +41,7 @@ struct SurfaceProjectionStats {
   std::uint64_t box_tests = 0;
   std::uint64_t triangle_tests = 0;
   std::uint64_t normal_rejected_triangles = 0;
+  std::uint64_t component_rejected_triangles = 0;
   std::uint32_t skipped_degenerate_triangles = 0;
   std::uint32_t accepted_iterations = 0;
   std::uint32_t rejected_steps = 0;
@@ -70,6 +75,7 @@ class PreparedSurfaceProjector {
       std::uint32_t u_segments, std::uint32_t v_segments,
       const SurfaceProjectionOptions &options = {}) const;
   std::uint32_t active_triangle_count() const;
+  std::uint32_t connected_component_count() const;
   std::uint32_t skipped_degenerate_triangles() const;
 
  private:

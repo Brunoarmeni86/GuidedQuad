@@ -125,6 +125,10 @@ int main() {
     try { (void)source.skipped_degenerate_triangles(); }
     catch(const std::logic_error&) { rejected=true; }
     assert(rejected);
+    rejected=false;
+    try { (void)source.connected_component_count(); }
+    catch(const std::logic_error&) {rejected=true;}
+    assert(rejected);
     QuadPatchOptions q;
     q.u_segments=4;q.v_segments=4;
     const auto patch=solve_quad_patch(square_boundary(),q).mesh;
@@ -177,6 +181,48 @@ int main() {
       (void)inverted_only.project(patch,8,8,opts);
     } catch(const std::runtime_error&) {rejected=true;}
     assert(rejected);
+  }
+  {
+    // Two separately indexed shells have the SAME normal orientation and
+    // are very close in space. A normal filter alone cannot distinguish them,
+    // while an explicit edge-connected source component can.
+    TriangleMesh layers;
+    layers.vertices={{0,0,0.01},{1,0,0.01},{1,1,0.01},{0,1,0.01},
+                     {0,0,0.04},{1,0,0.04},{1,1,0.04},{0,1,0.04}};
+    layers.triangles={{0,1,2},{0,2,3},{4,5,6},{4,6,7}};
+    PreparedSurfaceProjector prepared(layers);
+    assert(prepared.connected_component_count()==2);
+    QuadPatchOptions q; q.u_segments=8; q.v_segments=8;
+    const auto patch=solve_quad_patch(square_boundary(),q).mesh;
+    SurfaceProjectionOptions options;
+    options.min_reference_normal_dot=0.5; // both shells satisfy this
+    const auto nearest=prepared.project(patch,8,8,options);
+    options.source_component_id=1; // explicit farther, same-facing shell
+    const auto selected=prepared.project(patch,8,8,options);
+    const std::size_t center=4*9+4;
+    assert(nearest.mesh.vertices[center].z>0.009);
+    assert(nearest.mesh.vertices[center].z<0.011);
+    assert(selected.mesh.vertices[center].z>0.039);
+    assert(selected.mesh.vertices[center].z<0.041);
+    assert(selected.stats.final_rms_distance<0.000001);
+    for(std::size_t k=0;k<patch.vertices.size();++k) {
+      if(is_boundary(k,8,8))
+        assert(close(selected.mesh.vertices[k],patch.vertices[k]));
+    }
+    options.source_component_id=2;
+    bool invalid=false;
+    try { (void)prepared.project(patch,8,8,options); }
+    catch (const std::invalid_argument&) {invalid=true;}
+    assert(invalid);
+  }
+  {
+    // Touching at one vertex alone is not an edge-connected surface shell.
+    TriangleMesh vertex_only;
+    vertex_only.vertices={{0,0,0},{1,0,0},{0,1,0},
+                          {-1,0,0},{0,-1,0}};
+    vertex_only.triangles={{0,1,2},{0,3,4}};
+    PreparedSurfaceProjector prepared(vertex_only);
+    assert(prepared.connected_component_count()==2);
   }
   {
     // Projection distance is measured against original positions, not the

@@ -42,4 +42,8 @@ if(BUILD_TESTING)
     project-loop ${CMAKE_CURRENT_SOURCE_DIR}/tests/square.obj
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/curved_surface.obj
     ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_oriented_projected.obj 0 1 2 3 8 8 2 1 0.5)
+  add_test(NAME guidedquad_projection_component_cli COMMAND guidedquad_cli
+    project-loop ${CMAKE_CURRENT_SOURCE_DIR}/tests/square.obj
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/curved_surface.obj
+    ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_component_projected.obj 0 1 2 3 8 8 2 1 0.5 2 0)
 endif()

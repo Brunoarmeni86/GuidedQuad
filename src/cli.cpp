@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
               << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n"
               << "       guidedquad_cli patch-loop input.obj output.obj c0 c1 c2 c3 nu nv\n"
               << "       guidedquad_cli check-quads quad_mesh.obj\n"
-              << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength] [normal_dot] [max_distance]\n"
+              << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength] [normal_dot] [max_distance] [component_id]\n"
               << "Patch corners are four ordered indices in the extracted closed boundary path.\n";
     return 2;
   }
@@ -170,7 +170,7 @@ int main(int argc, char **argv) {
     if (mode == "patch-loop" || mode == "project-loop") {
       const bool projecting=(mode=="project-loop");
       const int shift=projecting?1:0;
-      if ((!projecting && argc != 10) || (projecting && (argc<11||argc>15))) {
+      if ((!projecting && argc != 10) || (projecting && (argc<11||argc>16))) {
         throw std::invalid_argument("patch mode needs 4 corner positions and U/V segment counts");
       }
       const auto border=guidedquad::extract_region_boundaries(
@@ -209,6 +209,9 @@ int main(int argc, char **argv) {
           if(consumed!=std::string(argv[14]).size()) {
             throw std::invalid_argument("max projection distance contains invalid characters");
           }
+        }
+        if (argc>=16) {
+          project_options.source_component_id=parse_u32(argv[15]);
         }
         auto projected=guidedquad::project_quad_patch_to_surface(
             reference,result.mesh,options.u_segments,options.v_segments,project_options);
