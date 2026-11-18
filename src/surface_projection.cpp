@@ -210,10 +210,10 @@ class SurfaceBvh {
     const double dr=nodes_[node.right].box.dist2(p);
     if(dl<=dr) {
       if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,desired_component,stats);
-      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
+      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,desired_component,stats);
     } else {
-      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
-      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,stats);
+      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,desired_component,stats);
+      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,desired_component,stats);
     }
   }
 
