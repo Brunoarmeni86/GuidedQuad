@@ -342,6 +342,13 @@ SurfaceProjectionResult project_quad_patch_to_surface(
     if(!accepted)break;
   }
 
+  // No accepted iteration means the mesh is unchanged: the initial nearest
+  // distances are still valid. Avoid an unnecessary full BVH query pass.
+  if(output.stats.accepted_iterations==0) {
+    output.stats.final_rms_distance=output.stats.initial_rms_distance;
+    return output;
+  }
+
   double final_sum=0.0;
   for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i) {
     const std::size_t idx=index(i,j,nu);
