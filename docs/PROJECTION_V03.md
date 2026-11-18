@@ -42,6 +42,12 @@ The synthetic test reference surface is a triangulated height field \`z=0.16 sin
 
 The reproducible CI workflow tests Debug and Release on Linux, Windows, macOS and prints query counts and RMS for the synthetic 12×12 case on Linux Release.
 
+## Measured synthetic reference (GitHub Actions Ubuntu Release)
+
+A 12×12 flat patch projected against a 28×28 triangulated height field (1,568 triangles) produced **484 BVH nearest-point queries**, examining **13,038 triangles** instead of **758,912 triangle visits** for a brute-force all-triangle scan at the same query count: **98.28% fewer triangle tests**, or about **58.2× fewer triangle tests** (not a wall-clock speedup measurement). Interior-vertex nearest-surface RMS was **0.0830842** before projection and **9.67397e−18** after projection; boundary vertices remained fixed.
+
+The reference surface is smooth and well sampled, so the near-zero final error is not an indicator of equal accuracy on thin or self-occluding organic geometry. Full timings, peak RAM and matched Exoside comparisons remain unmeasured. These values are captured in GitHub Actions V0.3 projection test output.
+
 ## What is still not solved
 
 - Global mesh self-intersection, nearest-point ambiguity across folds and thin features, topology-sensitive nearest surface association or projection along intended normals.
