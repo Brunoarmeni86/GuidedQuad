@@ -20,4 +20,7 @@ if(BUILD_TESTING)
   add_executable(guidedquad_patch_tests tests/test_patch_solver.cpp)
   target_link_libraries(guidedquad_patch_tests PRIVATE guidedquad_core)
   add_test(NAME guidedquad_patch COMMAND guidedquad_patch_tests)
+  add_test(NAME guidedquad_patch_cli COMMAND guidedquad_cli
+    patch-loop ${CMAKE_CURRENT_SOURCE_DIR}/tests/square.obj
+    ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_square_quads.obj 0 1 2 3 5 5)
 endif()
