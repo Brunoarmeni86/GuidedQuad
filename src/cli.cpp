@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "guidedquad/guide_graph.hpp"
 #include "guidedquad/patch_solver.hpp"
+#include "guidedquad/surface_projection.hpp"
 #include <cstdlib>
 #include <cstdint>
 #include <iomanip>
@@ -109,34 +110,64 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: guidedquad_cli facesets input.obj face_ids.txt output.obj\n"
               << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n"
               << "       guidedquad_cli patch-loop input.obj output.obj c0 c1 c2 c3 nu nv\n"
+              << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength]\n"
               << "Patch corners are four ordered indices in the extracted closed boundary path.\n";
     return 2;
   }
   try {
     const std::string mode(argv[1]);
     const auto mesh = read_obj(argv[2]);
-    if (mode == "patch-loop") {
-      if (argc != 10) throw std::invalid_argument("patch-loop requires 4 corners and 2 grid counts");
+    if (mode == "patch-loop" || mode == "project-loop") {
+      const bool projecting=(mode=="project-loop");
+      const int shift=projecting?1:0;
+      if ((!projecting && argc != 10) || (projecting && (argc<11||argc>13))) {
+        throw std::invalid_argument("patch mode needs 4 corner positions and U/V segment counts");
+      }
       const auto border=guidedquad::extract_region_boundaries(
           mesh,std::vector<int>(mesh.triangles.size(),0),true);
       if (border.paths.size()!=1 || !border.paths[0].closed) {
-        throw std::invalid_argument("patch-loop requires exactly one closed outer mesh border");
+        throw std::invalid_argument("patch requires exactly one closed outer boundary loop");
       }
       const auto boundary=guidedquad::patch_boundary_from_loop(
-          border,0,{parse_u32(argv[4]),parse_u32(argv[5]),
-                    parse_u32(argv[6]),parse_u32(argv[7])});
+          border,0,{parse_u32(argv[4+shift]),parse_u32(argv[5+shift]),
+                    parse_u32(argv[6+shift]),parse_u32(argv[7+shift])});
       guidedquad::QuadPatchOptions options;
-      options.u_segments=parse_u32(argv[8]);
-      options.v_segments=parse_u32(argv[9]);
-      const auto result=guidedquad::solve_quad_patch(boundary,options);
-      write_quads(result.mesh,argv[3]);
-      std::cout << "Quad patch: " << result.mesh.vertices.size() << " vertices, "
-                << result.mesh.quads.size() << " quads; boundary deviation "
-                << result.quality.max_boundary_error << "; worst aspect ratio "
-                << result.quality.worst_edge_aspect_ratio
-                << "; min scaled Jacobian " << result.quality.minimum_scaled_jacobian
-                << "; max warpage " << result.quality.max_diagonal_warpage_deg
-                << " deg\n";
+      options.u_segments=parse_u32(argv[8+shift]);
+      options.v_segments=parse_u32(argv[9+shift]);
+      auto result=guidedquad::solve_quad_patch(boundary,options);
+      if (projecting) {
+        const TriangleMesh reference=read_obj(argv[3]);
+        guidedquad::SurfaceProjectionOptions project_options;
+        if (argc>=12) project_options.iterations=parse_u32(argv[11]);
+        if (argc>=13) {
+          std::size_t consumed=0;
+          project_options.strength=std::stod(argv[12],&consumed);
+          if(consumed!=std::string(argv[12]).size()){
+            throw std::invalid_argument("projection strength contains invalid characters");
+          }
+        }
+        auto projected=guidedquad::project_quad_patch_to_surface(
+            reference,result.mesh,options.u_segments,options.v_segments,project_options);
+        write_quads(projected.mesh,argv[4]);
+        std::cout<<"Projected quad patch: "<<projected.mesh.quads.size()
+                 <<" quads, nearest-point RMS "
+                 <<projected.stats.initial_rms_distance<<" -> "
+                 <<projected.stats.final_rms_distance
+                 <<", moved interior vertices "<<projected.stats.moved_vertices
+                 <<", triangle tests "<<projected.stats.triangle_tests
+                 <<" across "<<projected.stats.closest_queries
+                 <<" BVH queries, accepted steps "<<projected.stats.accepted_iterations
+                 <<'\n';
+      } else {
+        write_quads(result.mesh,argv[3]);
+        std::cout << "Quad patch: " << result.mesh.vertices.size() << " vertices, "
+                  << result.mesh.quads.size() << " quads; boundary deviation "
+                  << result.quality.max_boundary_error << "; worst aspect ratio "
+                  << result.quality.worst_edge_aspect_ratio
+                  << "; min scaled Jacobian " << result.quality.minimum_scaled_jacobian
+                  << "; max warpage " << result.quality.max_diagonal_warpage_deg
+                  << " deg\n";
+      }
       return 0;
     }
     if (argc<5) throw std::invalid_argument("facesets/contours mode requires input attributes and output path");
