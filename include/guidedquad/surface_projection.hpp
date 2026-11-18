@@ -3,6 +3,7 @@
 
 #include "guidedquad/patch_solver.hpp"
 #include <cstdint>
+#include <limits>
 
 namespace guidedquad {
 
@@ -16,6 +17,10 @@ struct SurfaceProjectionOptions {
   double min_area_ratio = 0.1;     // candidate triangle area / initial area
   double min_corner_sine = 0.05;   // signed scaled Jacobian wrt baseline normal
   double min_normal_dot = 0.1;     // candidate triangle normal vs initial
+  // Optional strict correspondence radius from ORIGINAL patch positions.
+  // A target beyond this distance is skipped, not partially projected.
+  // Infinity (default) disables the limit; must be >0 if finite.
+  double max_projection_distance = std::numeric_limits<double>::infinity();
 };
 
 struct SurfaceProjectionStats {
@@ -25,6 +30,7 @@ struct SurfaceProjectionStats {
   std::uint32_t skipped_degenerate_triangles = 0;
   std::uint32_t accepted_iterations = 0;
   std::uint32_t rejected_steps = 0;
+  std::uint64_t distance_rejected_targets = 0; // target queries outside original radius
   std::uint32_t moved_vertices = 0;
   double initial_rms_distance = 0.0; // vertices interior to the source surface
   double final_rms_distance = 0.0;   // exact BVH nearest-surface distance
