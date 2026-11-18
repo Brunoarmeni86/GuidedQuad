@@ -1,10 +1,10 @@
 # GuidedQuad
 
-**Independent, constraint-first quadrangulation engine — experimental V0.1**
+**Independent, constraint-first quadrangulation engine — experimental V0.3 branch**
 
 GuidedQuad aims to produce precise, controllable all-quad retopology from artist-defined flow, hard boundaries and local density. The engine is designed to run independently of any custom Blender build. A stock Blender extension is planned, but **not yet implemented**.
 
-> **Current status:** V0.1 is a guide extraction prototype. It generates anchored guide polylines, **not quad meshes**. Do not install or advertise it as a working remesher yet.
+> **Current status:** `main` is the V0.1 guide extractor. This experimental branch contains V0.2 constrained four-sided all-quad patches plus V0.3 guarded BVH surface reprojection. It is **not an automatic remesher** for arbitrary meshes; no installable Blender addon yet.
 
 ## What works now
 
@@ -14,7 +14,9 @@ GuidedQuad aims to produce precise, controllable all-quad retopology from artist
 - Detect open and closed guide paths, guide junctions and input non-manifold edges.
 - Retain anchors to source vertices and source triangle edges.
 - Write the resulting polylines as Wavefront OBJ `l` elements.
-- Unit-test examples under `tests/`.
+- Generate real quad faces within one four-sided guide patch, with hard corner preservation.
+- Optionally project only the patch interior onto a source triangulated surface using a CPU BVH with inversion guard and backtracking.
+- Unit tests and an end-to-end projected OBJ export under `tests/`.
 
 ## Build and test
 
@@ -31,11 +33,15 @@ ctest --test-dir build -C Release --output-on-failure
 ```sh
 ./build/guidedquad_cli facesets tests/square.obj tests/square_facesets.txt guides_facesets.obj
 ./build/guidedquad_cli contours tests/square.obj tests/square_scalar.txt guides_contour.obj 0
+./build/guidedquad_cli patch-loop tests/square.obj flat_quads.obj 0 1 2 3 8 8
+./build/guidedquad_cli project-loop tests/square.obj tests/curved_surface.obj projected_quads.obj 0 1 2 3 8 8 2 1
 ```
 
 On Windows with a multi-config CMake generator, the executable may be under `build/Release/guidedquad_cli.exe`.
 
 The OBJ input must consist of triangle faces with positive indices. The Face Set file contains one region integer **per triangle**; the scalar file contains one number **per vertex**.
+
+Full [V0.3 projection algorithm, limits and benchmarks](docs/PROJECTION_V03.md). The four-sided patch solver is documented in [V0.2 solver notes](docs/SOLVER_V02.md).
 
 ## Roadmap
 
