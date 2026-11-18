@@ -70,6 +70,19 @@ int main(){
     assert(found.pairs.empty()); // nonoverlapping AABBs
   }
   {
+    // The predicates normalize the entire model to unit bounding scale.
+    // Both very small and very large but representable coordinates must
+    // give the same crossing and disjoint classifications.
+    for(double scale:{1e-10,1e10,1e120}) {
+      auto crossing=two_quads(false);
+      auto disjoint=two_quads(true,true);
+      for(auto *mesh:{&crossing,&disjoint})
+        for(auto &p:mesh->vertices){p.x*=scale;p.y*=scale;p.z*=scale;}
+      assert(find_quad_self_intersections(crossing).pairs.size()==1);
+      assert(find_quad_self_intersections(disjoint).pairs.empty());
+    }
+  }
+  {
     QuadPatchOptions o;
     o.u_segments=10;o.v_segments=10;
     const auto grid=solve_quad_patch(square_boundary(),o).mesh;
@@ -79,6 +92,10 @@ int main(){
     // Candidate count is far below an exhaustive O(Q^2) scan.
     const std::uint64_t all_pairs=grid.quads.size()*(grid.quads.size()-1)/2;
     assert(found.candidate_quad_pairs<all_pairs/10);
+    std::cout<<"Disjoint 10x10 quad grid: "<<found.candidate_quad_pairs
+             <<" candidate pairs vs "<<all_pairs
+             <<" exhaustive quad pairs, "<<found.bvh_pair_tests
+             <<" BVH box-pair tests\n";
   }
   {
     // Two edge-sharing quads touch but must not be reported as collisions.
@@ -104,6 +121,11 @@ int main(){
       (void)project_quad_patch_to_surface(source,m,24,2);
     } catch(const std::invalid_argument&){rejected=true;}
     assert(rejected);
+    // Explicit opt-out is allowed only for diagnostics / benchmarking.
+    SurfaceProjectionOptions unguarded;
+    unguarded.reject_self_intersections=false;
+    const auto unchecked=project_quad_patch_to_surface(source,m,24,2,unguarded);
+    assert(unchecked.stats.collision_validation_passes==0);
   }
   {
     auto invalid=two_quads(false);
