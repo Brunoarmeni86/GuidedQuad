@@ -63,6 +63,10 @@ int main() {
            baseline.quality.worst_edge_aspect_ratio * 1.020000001);
     assert(patch.quality.mean_abs_orthogonality <=
            baseline.quality.mean_abs_orthogonality + 1e-12);
+    // Regression: adaptive line search finds a useful step in this case.
+    assert(patch.quality.mean_abs_orthogonality <
+           baseline.quality.mean_abs_orthogonality - 0.001);
+    assert(patch.accepted_smooth_iterations > 0);
     assert(patch.initial_quality.worst_edge_aspect_ratio ==
            baseline.quality.worst_edge_aspect_ratio);
     const auto &bottom_middle=patch.mesh.vertices[5];
