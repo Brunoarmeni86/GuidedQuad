@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: guidedquad-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     strategy:
@@ -20,3 +24,6 @@ jobs:
         run: cmake --build build --config ${{ matrix.build_type }} --parallel
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+      - name: Solver quality comparison (reference case)
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: ctest --test-dir build -C Release -V -R "^guidedquad_patch$"
