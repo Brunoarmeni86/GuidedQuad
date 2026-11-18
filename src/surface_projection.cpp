@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <stdexcept>
 #include <vector>
 
@@ -88,7 +90,8 @@ class SurfaceBvh {
   std::vector<Box> triangle_boxes_;
   std::vector<Vec3> centroids_;
   std::vector<Node> nodes_;
-  SurfaceProjectionStats &stats_;
+  std::vector<Vec3> face_normals_;
+  std::uint32_t skipped_ = 0;
 
   Id build(Id first,Id end) {
     const Id node_index=static_cast<Id>(nodes_.size());
@@ -123,16 +126,22 @@ class SurfaceBvh {
     return node_index;
   }
 
-  void find(Id n,Vec3 p,double &best,Vec3 &point) {
+  void find(Id n,Vec3 p,double &best,Vec3 &point,
+            Vec3 reference_normal,double min_dot,SurfaceProjectionStats &stats) const {
     const Node &node=nodes_[n];
-    ++stats_.box_tests;
+    ++stats.box_tests;
     if(node.box.dist2(p)>best)return;
     if(node.leaf) {
       for(Id i=node.begin;i<node.begin+node.count;++i){
-        const auto &tri=mesh_.triangles[indices_[i]];
+        const Id face=indices_[i];
+        if(min_dot > -1.0 && dot(face_normals_[face],reference_normal)<min_dot) {
+          ++stats.normal_rejected_triangles;
+          continue;
+        }
+        const auto &tri=mesh_.triangles[face];
         const Vec3 q=closest_triangle(p,mesh_.vertices[tri[0]],
                                       mesh_.vertices[tri[1]],mesh_.vertices[tri[2]]);
-        ++stats_.triangle_tests;
+        ++stats.triangle_tests;
         const double d2=sqdist(p,q);
         if(d2<best){best=d2;point=q;}
       }
@@ -141,8 +150,8 @@ class SurfaceBvh {
     const double dl=nodes_[node.left].box.dist2(p);
     const double dr=nodes_[node.right].box.dist2(p);
     if(dl<=dr) {
-      if(dl<=best)find(node.left,p,best,point);
-      if(dr<=best)find(node.right,p,best,point);
+      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,stats);
+      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
     } else {
       if(dr<=best)find(node.right,p,best,point);
       if(dl<=best)find(node.left,p,best,point);
@@ -150,8 +159,7 @@ class SurfaceBvh {
   }
 
  public:
-  SurfaceBvh(const TriangleMesh &surface,SurfaceProjectionStats &stats)
-    :mesh_(surface),stats_(stats) {
+  explicit SurfaceBvh(const TriangleMesh &surface):mesh_(surface) {
     if(surface.vertices.size()>std::numeric_limits<Id>::max()||
        surface.triangles.size()>std::numeric_limits<Id>::max()||
        surface.triangles.size()>10000000ULL) {
@@ -161,6 +169,7 @@ class SurfaceBvh {
       throw std::invalid_argument("surface has non-finite source vertices");
     triangle_boxes_.resize(surface.triangles.size());
     centroids_.resize(surface.triangles.size());
+    face_normals_.resize(surface.triangles.size());
     for(Id i=0;i<surface.triangles.size();++i) {
       const auto &t=surface.triangles[i];
       if(t[0]>=surface.vertices.size()||t[1]>=surface.vertices.size()||
@@ -171,10 +180,11 @@ class SurfaceBvh {
       const Vec3 n=cross(sub(b,a),sub(c,a));
       if(t[0]==t[1]||t[1]==t[2]||t[2]==t[0]||
          !(norm(n)>0.0) || !finite(n)){
-        ++stats_.skipped_degenerate_triangles;
+        ++skipped_;
         continue;
       }
       indices_.push_back(i);
+      face_normals_[i]=mul(n,1.0/norm(n));
       Box bounds;bounds.extend(a);bounds.extend(b);bounds.extend(c);
       triangle_boxes_[i]=bounds;
       centroids_[i]=mul(add(add(a,b),c),1.0/3.0);
@@ -183,13 +193,17 @@ class SurfaceBvh {
     nodes_.reserve(indices_.size()/4+16);
     build(0,static_cast<Id>(indices_.size()));
   }
-  Vec3 nearest(Vec3 p) {
+  std::uint32_t skipped() const { return skipped_; }
+  std::uint32_t active_count() const { return static_cast<std::uint32_t>(indices_.size()); }
+  Vec3 nearest(Vec3 p,Vec3 reference_normal,double min_dot,
+               SurfaceProjectionStats &stats) const {
     if(!finite(p))throw std::invalid_argument("nearest query has invalid point");
-    ++stats_.closest_queries;
+    ++stats.closest_queries;
     double best=std::numeric_limits<double>::infinity();
     Vec3 closest{0,0,0};
-    find(0,p,best,closest);
-    if(!std::isfinite(best))throw std::runtime_error("surface nearest query overflow");
+    find(0,p,best,closest,reference_normal,min_dot,stats);
+    if(!std::isfinite(best))
+      throw std::runtime_error("no compatible triangle or numeric overflow in nearest query");
     return closest;
   }
 };
@@ -264,11 +278,40 @@ bool valid_candidate(const QuadPatchMesh &patch,
   }
   return true;
 }
+Vec3 original_vertex_normal(const QuadPatchMesh &patch, Id i, Id j, Id nu) {
+  const Vec3 du=sub(patch.vertices[index(i+1,j,nu)],
+                    patch.vertices[index(i-1,j,nu)]);
+  const Vec3 dv=sub(patch.vertices[index(i,j+1,nu)],
+                    patch.vertices[index(i,j-1,nu)]);
+  const Vec3 n=cross(du,dv);
+  const double l=norm(n);
+  if(!(l>0.0)||!std::isfinite(l))
+    throw std::invalid_argument("cannot define an original patch vertex normal");
+  return mul(n,1.0/l);
+}
 } // namespace
 
-SurfaceProjectionResult project_quad_patch_to_surface(
-    const TriangleMesh &surface,const QuadPatchMesh &patch,
-    Id nu,Id nv,const SurfaceProjectionOptions &opts) {
+struct PreparedSurfaceProjector::Impl {
+  TriangleMesh surface;
+  SurfaceBvh bvh;
+  explicit Impl(const TriangleMesh &reference):surface(reference),bvh(surface) {}
+};
+
+PreparedSurfaceProjector::PreparedSurfaceProjector(const TriangleMesh &surface)
+  :impl_(new Impl(surface)) {}
+PreparedSurfaceProjector::~PreparedSurfaceProjector() = default;
+PreparedSurfaceProjector::PreparedSurfaceProjector(PreparedSurfaceProjector &&) noexcept = default;
+PreparedSurfaceProjector &PreparedSurfaceProjector::operator=(PreparedSurfaceProjector &&) noexcept = default;
+std::uint32_t PreparedSurfaceProjector::active_triangle_count() const {
+  return impl_->bvh.active_count();
+}
+std::uint32_t PreparedSurfaceProjector::skipped_degenerate_triangles() const {
+  return impl_->bvh.skipped();
+}
+
+SurfaceProjectionResult PreparedSurfaceProjector::project(
+    const QuadPatchMesh &patch,
+    Id nu,Id nv,const SurfaceProjectionOptions &opts) const {
   if(!std::isfinite(opts.strength)||opts.strength<=0.0||opts.strength>1.0||
      !std::isfinite(opts.min_area_ratio)||opts.min_area_ratio<=0.0||
      opts.min_area_ratio>1.0||!std::isfinite(opts.min_corner_sine)||
@@ -276,7 +319,10 @@ SurfaceProjectionResult project_quad_patch_to_surface(
      !std::isfinite(opts.min_normal_dot)||opts.min_normal_dot<0.0||
      opts.min_normal_dot>=1.0||opts.iterations>64||
      opts.backtracking_steps==0||opts.backtracking_steps>20||
-     !(opts.max_projection_distance>0.0)){
+     !(opts.max_projection_distance>0.0)||
+     !std::isfinite(opts.min_reference_normal_dot)||
+     opts.min_reference_normal_dot < -1.0||
+     opts.min_reference_normal_dot > 1.0){
     throw std::invalid_argument("invalid guarded surface projection options");
   }
   SurfaceProjectionResult output;
@@ -286,8 +332,16 @@ SurfaceProjectionResult project_quad_patch_to_surface(
   if(interior*opts.iterations>20000000ULL)
     throw std::invalid_argument("projection iterations exceed CPU budget");
 
-  SurfaceBvh bvh(surface,output.stats);
+  const SurfaceBvh &bvh=impl_->bvh;
+  output.stats.skipped_degenerate_triangles=bvh.skipped();
   if(!interior)return output;
+  std::vector<Vec3> original_normals;
+  if(opts.min_reference_normal_dot > -1.0) {
+    original_normals.resize(patch.vertices.size());
+    for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i)
+      original_normals[index(i,j,nu)]=original_vertex_normal(patch,i,j,nu);
+  }
+  const Vec3 no_normal{0,0,0};
   std::vector<Vec3> targets(patch.vertices.size());
   QuadPatchMesh trial=patch;
 
@@ -297,7 +351,9 @@ SurfaceProjectionResult project_quad_patch_to_surface(
   double initial_sum=0.0;
   for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i){
     const std::size_t idx=index(i,j,nu);
-    targets[idx]=bvh.nearest(patch.vertices[idx]);
+    targets[idx]=bvh.nearest(patch.vertices[idx],
+        original_normals.empty()?no_normal:original_normals[idx],
+        opts.min_reference_normal_dot,output.stats);
     initial_sum+=sqdist(patch.vertices[idx],targets[idx]);
   }
   output.stats.initial_rms_distance=std::sqrt(initial_sum/static_cast<double>(interior));
@@ -312,7 +368,9 @@ SurfaceProjectionResult project_quad_patch_to_surface(
       const std::size_t idx=index(i,j,nu);
       // First iteration reuses the initial RMS queries. Re-query only after
       // geometry actually changes and the previous closest targets become stale.
-      if(iter>0)targets[idx]=bvh.nearest(output.mesh.vertices[idx]);
+      if(iter>0)targets[idx]=bvh.nearest(output.mesh.vertices[idx],
+          original_normals.empty()?no_normal:original_normals[idx],
+          opts.min_reference_normal_dot,output.stats);
       if(norm(sub(targets[idx],patch.vertices[idx]))>opts.max_projection_distance){
         // The radius is measured against the ORIGINAL grid, not the last
         // accepted position; consecutive iterations cannot drift across it.
@@ -352,7 +410,9 @@ SurfaceProjectionResult project_quad_patch_to_surface(
   double final_sum=0.0;
   for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i) {
     const std::size_t idx=index(i,j,nu);
-    const Vec3 q=bvh.nearest(output.mesh.vertices[idx]);
+    const Vec3 q=bvh.nearest(output.mesh.vertices[idx],
+        original_normals.empty()?no_normal:original_normals[idx],
+        opts.min_reference_normal_dot,output.stats);
     final_sum+=sqdist(output.mesh.vertices[idx],q);
     const double moved=norm(sub(output.mesh.vertices[idx],patch.vertices[idx]));
     if(moved>1e-14)++output.stats.moved_vertices;
@@ -360,6 +420,13 @@ SurfaceProjectionResult project_quad_patch_to_surface(
   }
   output.stats.final_rms_distance=std::sqrt(final_sum/static_cast<double>(interior));
   return output;
+}
+
+SurfaceProjectionResult project_quad_patch_to_surface(
+    const TriangleMesh &surface,const QuadPatchMesh &patch,
+    Id nu,Id nv,const SurfaceProjectionOptions &opts) {
+  const PreparedSurfaceProjector prepared(surface);
+  return prepared.project(patch,nu,nv,opts);
 }
 
 } // namespace guidedquad
