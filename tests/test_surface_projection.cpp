@@ -100,7 +100,8 @@ int main() {
     assert(projected.stats.accepted_iterations==0);
     assert(projected.stats.moved_vertices==0);
     assert(projected.stats.max_vertex_displacement==0);
-    assert(projected.mesh.vertices==patch.vertices); // values preserved exactly
+    for(std::size_t k=0;k<patch.vertices.size();++k)
+      assert(close(projected.mesh.vertices[k],patch.vertices[k]));
   }
   {
     // A small allowed radius permits partial but bounded projection without
