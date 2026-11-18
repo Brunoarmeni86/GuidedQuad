@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 using namespace guidedquad;
 
@@ -110,6 +111,33 @@ int main() {
     assert(b.mesh.quads.size()==64);
     assert(b.stats.final_rms_distance<b.stats.initial_rms_distance);
     assert(a.stats.skipped_degenerate_triangles==0);
+  }
+  {
+    // A public move constructor/assignment leaves a null implementation in
+    // the old owner. Access must throw deterministically rather than crash.
+    PreparedSurfaceProjector source(source_grid(8,0.1));
+    PreparedSurfaceProjector moved(std::move(source));
+    bool rejected=false;
+    try { (void)source.active_triangle_count(); }
+    catch(const std::logic_error&) { rejected=true; }
+    assert(rejected);
+    rejected=false;
+    try { (void)source.skipped_degenerate_triangles(); }
+    catch(const std::logic_error&) { rejected=true; }
+    assert(rejected);
+    QuadPatchOptions q;
+    q.u_segments=4;q.v_segments=4;
+    const auto patch=solve_quad_patch(square_boundary(),q).mesh;
+    rejected=false;
+    try { (void)source.project(patch,4,4); }
+    catch(const std::logic_error&) { rejected=true; }
+    assert(rejected);
+    assert(moved.active_triangle_count()==8*8*2);
+    PreparedSurfaceProjector assigned(source_grid(4,0.1));
+    assigned=std::move(moved);
+    assert(assigned.active_triangle_count()==8*8*2);
+    const auto projected=assigned.project(patch,4,4);
+    assert(projected.stats.final_rms_distance<projected.stats.initial_rms_distance);
   }
   {
     // A thin scanned object can contain nearby but oppositely oriented
