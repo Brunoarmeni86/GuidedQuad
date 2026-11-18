@@ -202,7 +202,9 @@ GuideGraph extract_region_boundaries(const TriangleMesh &mesh,
       if (boundary) {
         const Id a = static_cast<Id>(uses[i].key >> 32);
         const Id b = static_cast<Id>(uses[i].key);
-        out.connect(out.node(a, a, 0.0, mesh), out.node(b, b, 0.0, mesh));
+        const Id start = out.node(a, a, 0.0, mesh);
+        const Id end = out.node(b, b, 0.0, mesh);
+        out.connect(start, end);
       }
     }
     i = j;
