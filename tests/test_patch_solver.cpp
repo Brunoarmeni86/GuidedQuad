@@ -46,8 +46,15 @@ int main() {
     // baseline would keep the top middle at y=1 and bottom middle at y=0.
     auto options=QuadPatchOptions{};
     options.u_segments=10; options.v_segments=10;
+    QuadPatchOptions baseline_opts=options;
+    const auto baseline=solve_quad_patch(curved_square(),baseline_opts);
     options.smooth_iterations=25; options.smooth_strength=0.55;
     const auto patch=solve_quad_patch(curved_square(),options);
+    std::cout << "Curved patch: Coons aspect=" << baseline.quality.worst_edge_aspect_ratio
+              << ", smoothed aspect=" << patch.quality.worst_edge_aspect_ratio
+              << ", Coons ortho=" << baseline.quality.mean_abs_orthogonality
+              << ", smoothed ortho=" << patch.quality.mean_abs_orthogonality
+              << ", max boundary error=" << patch.quality.max_boundary_error << "\\n";
     assert(patch.mesh.quads.size()==100);
     assert(patch.quality.max_boundary_error < 1e-12);
     assert(patch.quality.minimum_face_area > 0);
