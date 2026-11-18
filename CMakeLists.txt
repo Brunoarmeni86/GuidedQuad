@@ -26,6 +26,11 @@ if(BUILD_TESTING)
   add_executable(guidedquad_collision_tests tests/test_quad_intersections.cpp)
   target_link_libraries(guidedquad_collision_tests PRIVATE guidedquad_core)
   add_test(NAME guidedquad_collision COMMAND guidedquad_collision_tests)
+  add_test(NAME guidedquad_collision_cli_clean COMMAND guidedquad_cli
+    check-quads ${CMAKE_CURRENT_SOURCE_DIR}/tests/separated_quads.obj)
+  add_test(NAME guidedquad_collision_cli_crossing COMMAND guidedquad_cli
+    check-quads ${CMAKE_CURRENT_SOURCE_DIR}/tests/colliding_quads.obj)
+  set_tests_properties(guidedquad_collision_cli_crossing PROPERTIES WILL_FAIL TRUE)
   add_test(NAME guidedquad_patch_cli COMMAND guidedquad_cli
     patch-loop ${CMAKE_CURRENT_SOURCE_DIR}/tests/square.obj
     ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_square_quads.obj 0 1 2 3 5 5)
