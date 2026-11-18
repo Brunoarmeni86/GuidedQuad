@@ -100,6 +100,9 @@ int main() {
     assert(projected.stats.accepted_iterations==0);
     assert(projected.stats.moved_vertices==0);
     assert(projected.stats.max_vertex_displacement==0);
+    assert(projected.stats.closest_queries==25); // initial pass only; no motion
+    assert(projected.stats.final_rms_distance==
+           projected.stats.initial_rms_distance);
     for(std::size_t k=0;k<patch.vertices.size();++k)
       assert(close(projected.mesh.vertices[k],patch.vertices[k]));
   }
