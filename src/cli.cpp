@@ -133,7 +133,10 @@ int main(int argc, char **argv) {
       std::cout << "Quad patch: " << result.mesh.vertices.size() << " vertices, "
                 << result.mesh.quads.size() << " quads; boundary deviation "
                 << result.quality.max_boundary_error << "; worst aspect ratio "
-                << result.quality.worst_edge_aspect_ratio << '\n';
+                << result.quality.worst_edge_aspect_ratio
+                << "; min scaled Jacobian " << result.quality.minimum_scaled_jacobian
+                << "; max warpage " << result.quality.max_diagonal_warpage_deg
+                << " deg\n";
       return 0;
     }
     if (argc<5) throw std::invalid_argument("facesets/contours mode requires input attributes and output path");
