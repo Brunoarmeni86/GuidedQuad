@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "guidedquad/guide_graph.hpp"
+#include "guidedquad/patch_solver.hpp"
 #include <cstdlib>
 #include <cstdint>
 #include <iomanip>
@@ -77,15 +78,65 @@ static void write_obj(const guidedquad::GuideGraph &g, const std::string &name) 
   if (!file) throw std::runtime_error("failed to write complete output OBJ");
 }
 
+static std::uint32_t parse_u32(const std::string &value) {
+  std::size_t consumed=0;
+  const unsigned long long parsed=std::stoull(value,&consumed,10);
+  if (consumed!=value.size() || parsed>std::numeric_limits<std::uint32_t>::max()) {
+    throw std::invalid_argument("invalid 32-bit unsigned integer argument");
+  }
+  return static_cast<std::uint32_t>(parsed);
+}
+
+static void write_quads(const guidedquad::QuadPatchMesh &mesh,
+                        const std::string &name) {
+  std::ofstream file(name);
+  if (!file) throw std::runtime_error("cannot open quad OBJ output");
+  file << std::setprecision(std::numeric_limits<double>::max_digits10);
+  file << "# GuidedQuad constrained four-sided quad patch\n";
+  for (const auto &p : mesh.vertices) {
+    file << "v " << p.x << ' ' << p.y << ' ' << p.z << '\n';
+  }
+  for (const auto &q : mesh.quads) {
+    file << "f " << q[0]+1 << ' ' << q[1]+1 << ' '
+         << q[2]+1 << ' ' << q[3]+1 << '\n';
+  }
+  file.flush();
+  if (!file) throw std::runtime_error("failed to finish quad OBJ output");
+}
+
 int main(int argc, char **argv) {
-  if (argc < 5) {
+  if (argc < 4) {
     std::cerr << "Usage: guidedquad_cli facesets input.obj face_ids.txt output.obj\n"
-              << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n";
+              << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n"
+              << "       guidedquad_cli patch-loop input.obj output.obj c0 c1 c2 c3 nu nv\n"
+              << "Patch corners are four ordered indices in the extracted closed boundary path.\n";
     return 2;
   }
   try {
     const std::string mode(argv[1]);
     const auto mesh = read_obj(argv[2]);
+    if (mode == "patch-loop") {
+      if (argc != 10) throw std::invalid_argument("patch-loop requires 4 corners and 2 grid counts");
+      const auto border=guidedquad::extract_region_boundaries(
+          mesh,std::vector<int>(mesh.triangles.size(),0),true);
+      if (border.paths.size()!=1 || !border.paths[0].closed) {
+        throw std::invalid_argument("patch-loop requires exactly one closed outer mesh border");
+      }
+      const auto boundary=guidedquad::patch_boundary_from_loop(
+          border,0,{parse_u32(argv[4]),parse_u32(argv[5]),
+                    parse_u32(argv[6]),parse_u32(argv[7])});
+      guidedquad::QuadPatchOptions options;
+      options.u_segments=parse_u32(argv[8]);
+      options.v_segments=parse_u32(argv[9]);
+      const auto result=guidedquad::solve_quad_patch(boundary,options);
+      write_quads(result.mesh,argv[3]);
+      std::cout << "Quad patch: " << result.mesh.vertices.size() << " vertices, "
+                << result.mesh.quads.size() << " quads; boundary deviation "
+                << result.quality.max_boundary_error << "; worst aspect ratio "
+                << result.quality.worst_edge_aspect_ratio << '\n';
+      return 0;
+    }
+    if (argc<5) throw std::invalid_argument("facesets/contours mode requires input attributes and output path");
     guidedquad::GuideGraph graph;
     if (mode == "facesets") {
       graph = guidedquad::extract_region_boundaries(mesh, read_values<int>(argv[3]));
