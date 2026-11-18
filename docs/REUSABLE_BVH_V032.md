@@ -29,6 +29,18 @@ auto projected = prepared.project(patch, u, v, options);
 
 When scanning nearby opposing layers, the nearest Euclidean triangle may belong to the wrong side of a surface. This filter searches for the closest **eligible** oriented triangle rather than blindly accepting the closest one. If none is eligible, it fails explicitly, rather than silently snapping the quad to a known incompatible layer. The filter is opt-in because incorrect or inconsistent source face winding can make orientation checks reject otherwise valid geometry. An aligned triangle can still be topologically unrelated; this is not a complete solution to thin-feature correspondence.
 
+### Standalone CLI
+
+The `project-loop` command now accepts two additional optional arguments after `[iterations] [strength]`: `[normal_dot] [max_distance]`.
+
+```sh
+./build/guidedquad_cli project-loop \
+  tests/square.obj tests/curved_surface.obj projected_oriented.obj \
+  0 1 2 3 8 8 2 1 0.5
+```
+
+This uses the winding-aware filter with `normal_dot=0.5`. It still constructs a one-shot BVH for the single CLI operation; **BVH persistence** is available through the C++ `PreparedSurfaceProjector` API when processing multiple patches. A standard Blender integration is still future work.
+
 ## Verified synthetic tests
 
 - A prepared reference index can be used after its original `TriangleMesh` goes out of scope.
