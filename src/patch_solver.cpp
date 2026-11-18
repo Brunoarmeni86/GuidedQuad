@@ -221,6 +221,15 @@ QuadPatchQuality inspect(const QuadPatchBoundary &sampled, const QuadPatchMesh &
         throw std::runtime_error("patch contains collapsed or locally inverted quad");
       }
       const Vec3 n=add(n1,n2);
+      const double normal_length=length(n);
+      if (!(normal_length > 0.0) || !std::isfinite(normal_length)) {
+        throw std::runtime_error("quad normal is invalid");
+      }
+      const Vec3 normal=scale(n,1.0/normal_length);
+      const double cos_diagonal=std::clamp(dot(scale(n1,1.0/aa),
+                                                scale(n2,1.0/ab)),-1.0,1.0);
+      const double angle=std::acos(cos_diagonal)*(180.0/3.14159265358979323846);
+      metrics.max_diagonal_warpage_deg=std::max(metrics.max_diagonal_warpage_deg,angle);
       if (i > 0 && dot(prev_in_row,n) <= 0.0) {
         throw std::runtime_error("patch fold detected across quad columns");
       }
@@ -240,7 +249,15 @@ QuadPatchQuality inspect(const QuadPatchBoundary &sampled, const QuadPatchMesh &
         if (!(le > 0.0 && li > 0.0)) {
           throw std::runtime_error("patch contains a collapsed edge");
         }
-        sum_orthogonality+=std::abs(dot(outgoing,incoming)/(le*li));
+        const Vec3 forward=scale(outgoing,1.0/le);
+        const Vec3 backward=scale(incoming,1.0/li);
+        const double scaled_jacobian=dot(cross(forward,backward),normal);
+        if (!(scaled_jacobian>1e-12) || !std::isfinite(scaled_jacobian)) {
+          throw std::runtime_error("quad has an inverted or collapsed corner Jacobian");
+        }
+        metrics.minimum_scaled_jacobian=
+            std::min(metrics.minimum_scaled_jacobian,scaled_jacobian);
+        sum_orthogonality+=std::abs(dot(forward,backward));
       }
       metrics.worst_edge_aspect_ratio=std::max(metrics.worst_edge_aspect_ratio,longest/shortest);
     }
