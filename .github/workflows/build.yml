@@ -27,3 +27,6 @@ jobs:
       - name: Solver quality comparison (reference case)
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         run: ctest --test-dir build -C Release -V -R "^guidedquad_patch$"
+      - name: BVH reprojection query diagnostics (reference case)
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: ctest --test-dir build -C Release -V -R "^guidedquad_projection$"
