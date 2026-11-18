@@ -153,8 +153,8 @@ class SurfaceBvh {
       if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,stats);
       if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
     } else {
-      if(dr<=best)find(node.right,p,best,point);
-      if(dl<=best)find(node.left,p,best,point);
+      if(dr<=best)find(node.right,p,best,point,reference_normal,min_dot,stats);
+      if(dl<=best)find(node.left,p,best,point,reference_normal,min_dot,stats);
     }
   }
 
