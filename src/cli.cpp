@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: guidedquad_cli facesets input.obj face_ids.txt output.obj\n"
               << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n"
               << "       guidedquad_cli patch-loop input.obj output.obj c0 c1 c2 c3 nu nv\n"
-              << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength]\n"
+              << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength] [normal_dot] [max_distance]\n"
               << "Patch corners are four ordered indices in the extracted closed boundary path.\n";
     return 2;
   }
@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
     if (mode == "patch-loop" || mode == "project-loop") {
       const bool projecting=(mode=="project-loop");
       const int shift=projecting?1:0;
-      if ((!projecting && argc != 10) || (projecting && (argc<11||argc>13))) {
+      if ((!projecting && argc != 10) || (projecting && (argc<11||argc>15))) {
         throw std::invalid_argument("patch mode needs 4 corner positions and U/V segment counts");
       }
       const auto border=guidedquad::extract_region_boundaries(
@@ -146,6 +146,20 @@ int main(int argc, char **argv) {
             throw std::invalid_argument("projection strength contains invalid characters");
           }
         }
+        if (argc>=14) {
+          std::size_t consumed=0;
+          project_options.min_reference_normal_dot=std::stod(argv[13],&consumed);
+          if(consumed!=std::string(argv[13]).size()) {
+            throw std::invalid_argument("reference normal dot contains invalid characters");
+          }
+        }
+        if (argc>=15) {
+          std::size_t consumed=0;
+          project_options.max_projection_distance=std::stod(argv[14],&consumed);
+          if(consumed!=std::string(argv[14]).size()) {
+            throw std::invalid_argument("max projection distance contains invalid characters");
+          }
+        }
         auto projected=guidedquad::project_quad_patch_to_surface(
             reference,result.mesh,options.u_segments,options.v_segments,project_options);
         write_quads(projected.mesh,argv[4]);
@@ -154,6 +168,7 @@ int main(int argc, char **argv) {
                  <<projected.stats.initial_rms_distance<<" -> "
                  <<projected.stats.final_rms_distance
                  <<", moved interior vertices "<<projected.stats.moved_vertices
+                 <<", normal-filtered triangles "<<projected.stats.normal_rejected_triangles
                  <<", triangle tests "<<projected.stats.triangle_tests
                  <<" across "<<projected.stats.closest_queries
                  <<" BVH queries, accepted steps "<<projected.stats.accepted_iterations

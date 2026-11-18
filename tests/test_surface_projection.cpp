@@ -82,6 +82,75 @@ int main() {
              <<projected.stats.final_rms_distance<<'\n';
   }
   {
+    // PreparedBVH owns an immutable copy. Project multiple different patches
+    // through one reference index even after the original mesh is destroyed.
+    const auto build=[]() {
+      const TriangleMesh source=source_grid(28,0.16);
+      return PreparedSurfaceProjector(source);
+    };
+    PreparedSurfaceProjector shared=build();
+    assert(shared.active_triangle_count()==28*28*2);
+    assert(shared.skipped_degenerate_triangles()==0);
+    QuadPatchOptions q;
+    q.u_segments=12;q.v_segments=12;
+    const auto large=solve_quad_patch(square_boundary(),q).mesh;
+    q.u_segments=8;q.v_segments=8;
+    const auto small=solve_quad_patch(square_boundary(),q).mesh;
+    SurfaceProjectionOptions options;
+    const auto a=shared.project(large,12,12,options);
+    const auto b=shared.project(small,8,8,options);
+    const auto fresh=project_quad_patch_to_surface(source_grid(28,0.16),
+                                                 large,12,12,options);
+    assert(a.mesh.quads==fresh.mesh.quads);
+    assert(a.mesh.vertices.size()==fresh.mesh.vertices.size());
+    for(std::size_t k=0;k<a.mesh.vertices.size();++k)
+      assert(close(a.mesh.vertices[k],fresh.mesh.vertices[k]));
+    assert(std::abs(a.stats.final_rms_distance-fresh.stats.final_rms_distance)<1e-13);
+    assert(a.stats.closest_queries==fresh.stats.closest_queries);
+    assert(b.mesh.quads.size()==64);
+    assert(b.stats.final_rms_distance<b.stats.initial_rms_distance);
+    assert(a.stats.skipped_degenerate_triangles==0);
+  }
+  {
+    // A thin scanned object can contain nearby but oppositely oriented
+    // surface layers. The optional filter must select the compatible layer,
+    // not merely the closest one in Euclidean distance.
+    TriangleMesh layers;
+    layers.vertices={{0,0,0.012},{1,0,0.012},{1,1,0.012},{0,1,0.012},
+                     {0,0,0.04},{1,0,0.04},{1,1,0.04},{0,1,0.04}};
+    layers.triangles={{0,2,1},{0,3,2},{4,5,6},{4,6,7}};
+    PreparedSurfaceProjector shared(layers);
+    QuadPatchOptions q;
+    q.u_segments=8;q.v_segments=8;
+    const auto patch=solve_quad_patch(square_boundary(),q).mesh;
+    SurfaceProjectionOptions opts;
+    opts.iterations=2;
+    const auto nearest=shared.project(patch,8,8,opts);
+    opts.min_reference_normal_dot=0.5;
+    const auto oriented=shared.project(patch,8,8,opts);
+    const std::size_t mid=4*9+4;
+    assert(nearest.mesh.vertices[mid].z>0.009);
+    assert(nearest.mesh.vertices[mid].z<0.019);
+    assert(oriented.mesh.vertices[mid].z>0.035);
+    assert(oriented.mesh.vertices[mid].z<0.045);
+    assert(oriented.stats.normal_rejected_triangles>0);
+    for(std::size_t k=0;k<patch.vertices.size();++k) {
+      if(is_boundary(k,8,8)) {
+        assert(close(patch.vertices[k],nearest.mesh.vertices[k]));
+        assert(close(patch.vertices[k],oriented.mesh.vertices[k]));
+      }
+    }
+    // If ONLY the incompatible layer exists, do not silently fall back.
+    layers.vertices.resize(4);
+    layers.triangles.resize(2);
+    PreparedSurfaceProjector inverted_only(layers);
+    bool rejected=false;
+    try {
+      (void)inverted_only.project(patch,8,8,opts);
+    } catch(const std::runtime_error&) {rejected=true;}
+    assert(rejected);
+  }
+  {
     // Projection distance is measured against original positions, not the
     // current accepted step. A remote scan surface must not attract the chart
     // across an unrelated feature or separate layer.
@@ -193,6 +262,12 @@ int main() {
     assert(failed);
     bad.strength=1.0;
     bad.max_projection_distance=0.0;
+    failed=false;
+    try { (void)project_quad_patch_to_surface(source_grid(4,0.1),patch,3,3,bad); }
+    catch(const std::invalid_argument&) { failed=true; }
+    assert(failed);
+    bad.max_projection_distance=1.0;
+    bad.min_reference_normal_dot=1.5;
     failed=false;
     try { (void)project_quad_patch_to_surface(source_grid(4,0.1),patch,3,3,bad); }
     catch(const std::invalid_argument&) { failed=true; }
