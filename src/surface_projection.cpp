@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "guidedquad/surface_projection.hpp"
+#include "guidedquad/quad_intersections.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -331,6 +332,12 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
   SurfaceProjectionResult output;
   output.mesh=patch;
   const auto refs=validate_input(patch,nu,nv);
+  if(opts.reject_self_intersections) {
+    ++output.stats.collision_validation_passes;
+    if(!find_quad_self_intersections(patch,1).pairs.empty()) {
+      throw std::invalid_argument("input patch contains nonadjacent quad self-intersections");
+    }
+  }
   const std::uint64_t interior=nu>1&&nv>1?std::uint64_t(nu-1)*(nv-1):0;
   if(interior*opts.iterations>20000000ULL)
     throw std::invalid_argument("projection iterations exceed CPU budget");
@@ -391,7 +398,14 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
         trial.vertices[idx]=add(mul(output.mesh.vertices[idx],1.0-alpha),
                                  mul(targets[idx],alpha));
       }
-      if(valid_candidate(trial,refs,opts)){
+      const bool locally_valid=valid_candidate(trial,refs,opts);
+      bool globally_valid=true;
+      if(locally_valid && opts.reject_self_intersections) {
+        ++output.stats.collision_validation_passes;
+        globally_valid=find_quad_self_intersections(trial,1).pairs.empty();
+        if(!globally_valid) ++output.stats.collision_rejected_steps;
+      }
+      if(locally_valid && globally_valid){
         output.mesh.vertices.swap(trial.vertices);
         ++output.stats.accepted_iterations;
         accepted=true;

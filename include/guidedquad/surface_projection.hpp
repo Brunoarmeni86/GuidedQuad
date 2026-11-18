@@ -27,6 +27,9 @@ struct SurfaceProjectionOptions {
   // If no eligible triangle exists, projection fails rather than snapping to
   // a known incompatible reference layer.
   double min_reference_normal_dot = -1.0;
+  // Validate nonadjacent quad collisions at input and on every candidate.
+  // Default safe; disabling this avoids BVH rebuilds but removes a guarantee.
+  bool reject_self_intersections = true;
 };
 
 struct SurfaceProjectionStats {
@@ -37,6 +40,8 @@ struct SurfaceProjectionStats {
   std::uint32_t skipped_degenerate_triangles = 0;
   std::uint32_t accepted_iterations = 0;
   std::uint32_t rejected_steps = 0;
+  std::uint32_t collision_rejected_steps = 0;
+  std::uint64_t collision_validation_passes = 0;
   std::uint64_t distance_rejected_targets = 0; // target queries outside original radius
   std::uint32_t moved_vertices = 0;
   double initial_rms_distance = 0.0; // vertices interior to the source surface
