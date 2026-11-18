@@ -28,10 +28,16 @@ void check_line(const std::vector<Vec3> &line) {
   }
 }
 
-std::vector<Vec3> resample(const std::vector<Vec3> &line, std::uint32_t count) {
+// Approximate sampling is deliberately opt-in: it may erase guide corners.
+// This function is also used as an explicit comparison baseline in tests.
+std::vector<Vec3> resample_arclength(const std::vector<Vec3> &line, std::uint32_t count) {
   std::vector<double> cumulative(line.size(), 0.0);
   for (std::size_t i=1; i<line.size(); ++i) {
-    cumulative[i] = cumulative[i-1] + distance(line[i], line[i-1]);
+    const double segment=distance(line[i], line[i-1]);
+    if (!(segment > 0.0) || !std::isfinite(segment)) {
+      throw std::invalid_argument("boundary has coincident or non-finite consecutive vertices");
+    }
+    cumulative[i] = cumulative[i-1] + segment;
   }
   const double total = cumulative.back();
   if (!(total > 0.0) || !std::isfinite(total)) {
@@ -44,16 +50,97 @@ std::vector<Vec3> resample(const std::vector<Vec3> &line, std::uint32_t count) {
   for (std::uint32_t i=1; i<count; ++i) {
     const double target = total * (double(i) / count);
     while (segment+1 < line.size() && cumulative[segment] < target) ++segment;
-    while (segment+1 < line.size() && cumulative[segment] == cumulative[segment-1]) ++segment;
     const double span = cumulative[segment] - cumulative[segment-1];
-    if (!(span > 0.0)) {
-      throw std::invalid_argument("boundary interpolation has zero-length span");
-    }
     const double t = std::clamp((target - cumulative[segment-1])/span, 0.0, 1.0);
     sampled.push_back(add(scale(line[segment-1], 1.0-t), scale(line[segment],t)));
   }
   sampled.push_back(line.back());
   return sampled;
+}
+
+// The strict sampler inserts *every* source knot exactly. It can subdivide
+// original segments but never jumps across a painted corner or inflection.
+std::vector<Vec3> resample_strict(const std::vector<Vec3> &line, std::uint32_t count) {
+  const std::size_t n=line.size()-1;
+  if (n > count) {
+    throw std::invalid_argument("hard guide requires at least "+std::to_string(n)+
+                                " segments; requested "+std::to_string(count));
+  }
+  std::vector<double> lengths(n);
+  double total=0.0;
+  for (std::size_t k=0;k<n;++k) {
+    lengths[k]=distance(line[k],line[k+1]);
+    if (!(lengths[k]>0.0) || !std::isfinite(lengths[k])) {
+      throw std::invalid_argument("hard guide contains coincident or invalid consecutive points");
+    }
+    total+=lengths[k];
+  }
+  if (!std::isfinite(total)) throw std::invalid_argument("boundary arc length overflows");
+
+  // Extra subdivisions are apportioned by arc length. Every original segment
+  // receives at least one division. O(N log N + count) time and O(N) scratch.
+  std::vector<std::uint32_t> splits(n,1);
+  const std::uint32_t extras=count-static_cast<std::uint32_t>(n);
+  std::uint32_t assigned=0;
+  struct Fractional { double remainder; std::size_t index; };
+  std::vector<Fractional> fractions;
+  fractions.reserve(n);
+  for (std::size_t k=0;k<n;++k) {
+    const double share=static_cast<double>(extras)*(lengths[k]/total);
+    const auto add_count=static_cast<std::uint32_t>(std::min(
+        std::floor(share),static_cast<double>(extras-assigned)));
+    splits[k]+=add_count;
+    assigned+=add_count;
+    fractions.push_back({share-std::floor(share),k});
+  }
+  std::sort(fractions.begin(),fractions.end(),[](const Fractional &a,const Fractional &b) {
+    if (a.remainder != b.remainder) return a.remainder > b.remainder;
+    return a.index < b.index;
+  });
+  for (std::uint32_t i=0;i<extras-assigned;++i) ++splits[fractions[i].index];
+
+  std::vector<Vec3> result;
+  result.reserve(static_cast<std::size_t>(count)+1);
+  result.push_back(line.front());
+  for (std::size_t k=0;k<n;++k) {
+    const std::uint32_t divisions=splits[k];
+    for (std::uint32_t i=1;i<divisions;++i) {
+      const double t=double(i)/divisions;
+      result.push_back(add(scale(line[k],1.0-t),scale(line[k+1],t)));
+    }
+    result.push_back(line[k+1]); // retain exact original guide knot
+  }
+  if (result.size()!=static_cast<std::size_t>(count)+1) {
+    throw std::logic_error("strict resampling failed to allocate requested segments");
+  }
+  return result;
+}
+
+std::vector<Vec3> sample_boundary(const std::vector<Vec3> &line,
+                                  std::uint32_t count, bool strict) {
+  return strict ? resample_strict(line,count) : resample_arclength(line,count);
+}
+
+// The opt-in approximation mode reports max displacement of ORIGINAL source
+// vertices from the generated boundary polyline (not just the endpoints).
+// Source-vertex-to-output-segment deviation catches lost sharp corners.
+double source_vertex_deviation(const std::vector<Vec3> &original,
+                               const std::vector<Vec3> &sampled) {
+  double maximum=0.0;
+  for (const Vec3 p : original) {
+    double nearest=std::numeric_limits<double>::infinity();
+    for (std::size_t i=1;i<sampled.size();++i) {
+      const Vec3 ab=sub(sampled[i],sampled[i-1]);
+      const double squared=dot(ab,ab);
+      if (!(squared>0.0)) {
+        throw std::runtime_error("generated boundary has a collapsed segment");
+      }
+      const double t=std::clamp(dot(sub(p,sampled[i-1]),ab)/squared,0.0,1.0);
+      nearest=std::min(nearest,distance(p,add(sampled[i-1],scale(ab,t))));
+    }
+    maximum=std::max(maximum,nearest);
+  }
+  return maximum;
 }
 
 void ensure_matching_corners(QuadPatchBoundary &b) {
