@@ -48,6 +48,18 @@ A 12×12 flat patch projected against a 28×28 triangulated height field (1,568 
 
 The reference surface is smooth and well sampled, so the near-zero final error is not an indicator of equal accuracy on thin or self-occluding organic geometry. Full timings, peak RAM and matched Exoside comparisons remain unmeasured. These values are captured in GitHub Actions V0.3 projection test output.
 
+## V0.3.1 audit: cached queries and bounded correspondence (experimental)
+
+**Confirmed inefficiency fixed:** the first projection iteration used to repeat all the nearest-triangle queries that had just been used for the initial RMS measurement. We now cache the original nearest targets for the first iteration. When zero steps are requested, or no step is accepted, the initial RMS is reused as the final RMS without an extra BVH pass. Geometry is unchanged by this optimization.
+
+**Measured on the same Linux Release CI synthetic fixture:** V0.3: 484 nearest queries, 13,038 triangle tests; V0.3.1: **363 queries, 7,639 triangle tests**, with the same final RMS (~9.67e-18). This represents 25% fewer queries and ~41.4% fewer triangle tests on that one case, **not an independently measured wall-clock speedup**; query traversal cost and BVH build cost still matter.
+
+**Correspondence safety:** `SurfaceProjectionOptions::max_projection_distance` (positive real-world units, default infinity) can now limit each candidate closest-surface target's distance from the *original* patch vertex. Distant targets are skipped, not partially snapped; `distance_rejected_targets` counts rejections. This radius is checked against the original position on every iteration, preventing slow cross-surface drift across successive steps. Set a physically meaningful radius when processing thin parts and nearby disconnected scan components. The default unlimited behavior preserves existing API results unless the caller opts in.
+
+**Regression coverage:** remote target surface rejected without moving the chart, valid targets allowed only within an original-space radius, no-op projection uses one query per interior vertex, and duplicate-first-query removal preserves test geometry.
+
+**Remaining risks:** this distance guard cannot resolve two different source layers inside the allowed radius; an oriented/feature-aware correspondence strategy is still required. The current CPU BVH is reconstructed for each new patch; persistent multi-patch acceleration is planned. Also missing: global quad self-intersection detection (as opposed to local Jacobian guards), multiscale benchmark with measured runtime/RAM, UV and color transfer.
+
 ## What is still not solved
 
 - Global mesh self-intersection, nearest-point ambiguity across folds and thin features, topology-sensitive nearest surface association or projection along intended normals.
