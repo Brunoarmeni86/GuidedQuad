@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "guidedquad/guide_graph.hpp"
 #include <cstdlib>
+#include <cstdint>
+#include <iomanip>
+#include <limits>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -27,8 +30,14 @@ static TriangleMesh read_obj(const std::string &name) {
       for (int i = 0; i < 3; ++i) {
         std::string token;
         if (!(in >> token)) throw std::runtime_error("only triangulated OBJ is supported");
-        long index = std::stol(token.substr(0, token.find('/')));
-        if (index <= 0) throw std::runtime_error("OBJ indices must be positive");
+        const std::string raw_index = token.substr(0, token.find('/'));
+        if (raw_index.empty()) throw std::runtime_error("OBJ face index is missing");
+        std::size_t consumed = 0;
+        const unsigned long long index = std::stoull(raw_index, &consumed, 10);
+        if (consumed != raw_index.size() || index == 0 ||
+            index > std::numeric_limits<std::uint32_t>::max()) {
+          throw std::runtime_error("OBJ face index is invalid or out of range");
+        }
         f[i] = static_cast<std::uint32_t>(index - 1);
       }
       std::string extra;
@@ -53,6 +62,7 @@ static std::vector<T> read_values(const std::string &name) {
 static void write_obj(const guidedquad::GuideGraph &g, const std::string &name) {
   std::ofstream file(name);
   if (!file) throw std::runtime_error("cannot write output OBJ");
+  file << std::setprecision(std::numeric_limits<double>::max_digits10);
   file << "# GuidedQuad V0.1: guide polylines only, not a quad mesh\n";
   for (const auto &n : g.nodes) {
     file << "v " << n.position.x << ' ' << n.position.y << ' ' << n.position.z << '\n';
@@ -63,6 +73,8 @@ static void write_obj(const guidedquad::GuideGraph &g, const std::string &name) 
     for (std::uint32_t n : p.nodes) file << ' ' << n + 1;
     file << '\n';
   }
+  file.flush();
+  if (!file) throw std::runtime_error("failed to write complete output OBJ");
 }
 
 int main(int argc, char **argv) {
@@ -84,6 +96,7 @@ int main(int argc, char **argv) {
       throw std::invalid_argument("mode must be facesets or contours");
     }
     write_obj(graph, argv[4]);
+    for (const auto &warning : graph.warnings) std::cerr << "GuidedQuad warning: " << warning << '\n';
     std::cout << "Guides: " << graph.nodes.size() << " nodes, "
               << graph.edges.size() << " edges, " << graph.paths.size()
               << " paths, " << graph.warnings.size() << " warnings\n";
