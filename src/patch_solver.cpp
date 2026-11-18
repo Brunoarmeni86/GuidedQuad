@@ -171,7 +171,9 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
   if (!std::isfinite(options.smooth_strength) ||
       options.smooth_strength < 0.0 || options.smooth_strength > 1.0 ||
       options.smooth_iterations > 5000 ||
-      vertex_count * options.smooth_iterations > 50000000ULL) {
+      vertex_count * options.smooth_iterations > 50000000ULL ||
+      !std::isfinite(options.max_aspect_growth) ||
+      options.max_aspect_growth < 0.0 || options.max_aspect_growth > 1.0) {
     throw std::invalid_argument("invalid patch smoothing options");
   }
   auto b=boundary;
@@ -210,9 +212,24 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
     mesh.vertices[index(nu,j,nu)]=right[j];
   }
 
+  for (std::uint32_t j=0;j<nv;++j) for (std::uint32_t i=0;i<nu;++i) {
+    mesh.quads.push_back({static_cast<std::uint32_t>(index(i,j,nu)),
+                          static_cast<std::uint32_t>(index(i+1,j,nu)),
+                          static_cast<std::uint32_t>(index(i+1,j+1,nu)),
+                          static_cast<std::uint32_t>(index(i,j+1,nu))});
+  }
+  // First verify the unoptimized Coons topology. A bad initial layout must
+  // not be concealed by smoothing, because the boundary chart is invalid.
+  output.initial_quality=inspect(b,mesh,nu,nv);
+  output.quality=output.initial_quality;
+
   if (options.smooth_iterations && options.smooth_strength && nu>1 && nv>1) {
     std::vector<Vec3> next=mesh.vertices;
+    std::vector<Vec3> best=mesh.vertices;
+    const double aspect_limit=output.initial_quality.worst_edge_aspect_ratio*
+                              (1.0+options.max_aspect_growth);
     for (std::uint32_t iteration=0;iteration<options.smooth_iterations;++iteration) {
+      // Deterministic Jacobi relaxation of interior points only.
       for (std::uint32_t j=1;j<nv;++j) for (std::uint32_t i=1;i<nu;++i) {
         const std::size_t k=index(i,j,nu);
         const Vec3 average=scale(add(add(mesh.vertices[index(i-1,j,nu)],
@@ -223,15 +240,26 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
                     scale(average,options.smooth_strength));
       }
       mesh.vertices.swap(next);
+      QuadPatchQuality candidate;
+      try {
+        candidate=inspect(b,mesh,nu,nv);
+      } catch (const std::runtime_error &) {
+        if (!options.quality_guard) throw;
+        break; // reject invalid candidate, preserve best valid quad mesh
+      }
+      // Never silently trade badly distorted edge lengths for an angular gain.
+      // A caller can explicitly opt out of this quality guard.
+      const bool accept=!options.quality_guard ||
+          (candidate.worst_edge_aspect_ratio <= aspect_limit &&
+           candidate.mean_abs_orthogonality+1e-12 < output.quality.mean_abs_orthogonality);
+      if (accept) {
+        best=mesh.vertices;
+        output.quality=candidate;
+        output.accepted_smooth_iterations=iteration+1;
+      }
     }
+    mesh.vertices.swap(best);
   }
-  for (std::uint32_t j=0;j<nv;++j) for (std::uint32_t i=0;i<nu;++i) {
-    mesh.quads.push_back({static_cast<std::uint32_t>(index(i,j,nu)),
-                          static_cast<std::uint32_t>(index(i+1,j,nu)),
-                          static_cast<std::uint32_t>(index(i+1,j+1,nu)),
-                          static_cast<std::uint32_t>(index(i,j+1,nu))});
-  }
-  output.quality=inspect(b,mesh,nu,nv);
   return output;
 }
 
