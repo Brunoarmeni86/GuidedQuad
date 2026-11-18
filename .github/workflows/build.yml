@@ -20,3 +20,6 @@ jobs:
         run: cmake --build build --config ${{ matrix.build_type }} --parallel
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+      - name: Solver quality comparison (reference case)
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: ctest --test-dir build -C Release -V -R "^guidedquad_patch$"
