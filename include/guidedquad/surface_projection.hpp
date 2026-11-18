@@ -4,6 +4,7 @@
 #include "guidedquad/patch_solver.hpp"
 #include <cstdint>
 #include <limits>
+#include <memory>
 
 namespace guidedquad {
 
@@ -21,12 +22,18 @@ struct SurfaceProjectionOptions {
   // A target beyond this distance is skipped, not partially projected.
   // Infinity (default) disables the limit; must be >0 if finite.
   double max_projection_distance = std::numeric_limits<double>::infinity();
+  // Optional source winding filter. -1 disables. Values in (-1,1] require
+  // consistent reference face winding aligned to the original quad patch.
+  // If no eligible triangle exists, projection fails rather than snapping to
+  // a known incompatible reference layer.
+  double min_reference_normal_dot = -1.0;
 };
 
 struct SurfaceProjectionStats {
   std::uint64_t closest_queries = 0;
   std::uint64_t box_tests = 0;
   std::uint64_t triangle_tests = 0;
+  std::uint64_t normal_rejected_triangles = 0;
   std::uint32_t skipped_degenerate_triangles = 0;
   std::uint32_t accepted_iterations = 0;
   std::uint32_t rejected_steps = 0;
@@ -40,6 +47,29 @@ struct SurfaceProjectionStats {
 struct SurfaceProjectionResult {
   QuadPatchMesh mesh;
   SurfaceProjectionStats stats;
+};
+
+// Build the reference triangle BVH once and reuse it across many patches.
+// The reference surface is copied and remains immutable for the cache lifetime.
+// Query counters belong to each projection result, not to the shared cache.
+class PreparedSurfaceProjector {
+ public:
+  explicit PreparedSurfaceProjector(const TriangleMesh &reference_surface);
+  ~PreparedSurfaceProjector();
+  PreparedSurfaceProjector(PreparedSurfaceProjector &&) noexcept;
+  PreparedSurfaceProjector &operator=(PreparedSurfaceProjector &&) noexcept;
+  PreparedSurfaceProjector(const PreparedSurfaceProjector &) = delete;
+  PreparedSurfaceProjector &operator=(const PreparedSurfaceProjector &) = delete;
+
+  SurfaceProjectionResult project(const QuadPatchMesh &patch,
+      std::uint32_t u_segments, std::uint32_t v_segments,
+      const SurfaceProjectionOptions &options = {}) const;
+  std::uint32_t active_triangle_count() const;
+  std::uint32_t skipped_degenerate_triangles() const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 // The input MUST be a regular UxV quad grid returned by solve_quad_patch.
