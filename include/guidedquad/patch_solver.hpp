@@ -23,6 +23,10 @@ struct QuadPatchOptions {
   // Optional interior-only Laplacian smoothing. Boundaries remain immutable.
   std::uint32_t smooth_iterations = 0;
   double smooth_strength = 0.0; // [0,1]
+  // Guarded relaxation only keeps a candidate when it improves angle quality
+  // while staying within this relative growth in worst side aspect ratio.
+  bool quality_guard = true;
+  double max_aspect_growth = 0.02; // 2% worst-aspect allowance
 };
 
 struct QuadPatchMesh {
@@ -40,6 +44,8 @@ struct QuadPatchQuality {
 struct QuadPatchResult {
   QuadPatchMesh mesh;
   QuadPatchQuality quality;
+  QuadPatchQuality initial_quality;
+  std::uint32_t accepted_smooth_iterations = 0;
 };
 
 // Construct one connected, all-quad chart on a four-sided patch.
