@@ -32,7 +32,8 @@ A Face Set or standard Blender Color Attribute adapter has not yet been develope
 
 - **Proves**: a simple independently implemented solver can generate quad topology which follows arbitrary piecewise-linear border guides; it can preserve hard border constraints and reject common local degeneracies.
 - **Does not prove**: superiority to Exoside; good automatic patch decomposition; global loop quality; automatic 4-RoSy singularity placement; exact curved source surface reprojection; UV preservation; local retopology editing.
-- Current smoothing can improve or worsen distortion for a given example. Quality diagnostics must drive future acceptance/rejection, not blind smoothing.
+- In the first unguarded curved-boundary example, 25 relaxation iterations reduced mean |cos(angle)| from **0.202441 to 0.159981** (better) but raised worst side aspect ratio from **1.22536 to 1.43089** (worse), with boundary deviation exactly 0. These are measured synthetic test data, not an Exoside comparison.
+- Added quality-guarded relaxation: evaluate every candidate iteration and retain only solutions improving orthogonality while limiting the worst aspect ratio to **2%** above the unsmoothed result (configurable). The baseline is preserved if no acceptable candidate exists. Guarded results must be remeasured on real organic models.
 
 ## Next technical steps
 
@@ -41,7 +42,7 @@ A Face Set or standard Blender Color Attribute adapter has not yet been develope
 - Add orientation fields and singularity planning, independent from density fields.
 - Implement hard/soft interior directional constraints and integral patch-side counts.
 - Add source triangle closest-point projection accelerated by a BVH, then compare error/quality against non-projected patches.
-- Add a quality-aware optimization objective with backtracking and early exit, not fixed smoothing passes.
+- Improve the initial quality-guarded Laplacian iteration with surface-aware optimization, line search, element-quality objectives and reliable termination; current guard only limits aspect regression and checks local folds.
 - Establish a fixed mesh corpus with curved mechanical/organic shapes and publish measured comparisons.
 
 ## Performance budget
