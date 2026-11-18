@@ -70,11 +70,70 @@ int main() {
     const std::uint64_t brute_tests=
         projected.stats.closest_queries*surface.triangles.size();
     assert(projected.stats.triangle_tests<brute_tests/3);
+    // Cached initialization must prevent the duplicate first-iteration
+    // nearest queries that used to waste one search per interior vertex.
+    const std::uint64_t interior=(base.u_segments-1)*(base.v_segments-1);
+    assert(projected.stats.closest_queries<=interior*3);
+
     std::cout<<"BVH: "<<projected.stats.closest_queries<<" nearest queries, "
              <<projected.stats.triangle_tests<<" triangle tests vs "
              <<brute_tests<<" brute-force, RMS "
              <<projected.stats.initial_rms_distance<<" -> "
              <<projected.stats.final_rms_distance<<'\n';
+  }
+  {
+    // Projection distance is measured against original positions, not the
+    // current accepted step. A remote scan surface must not attract the chart
+    // across an unrelated feature or separate layer.
+    QuadPatchOptions base;
+    base.u_segments=6; base.v_segments=6;
+    const auto patch=solve_quad_patch(square_boundary(),base).mesh;
+    TriangleMesh remote=source_grid(8,0.0);
+    for(auto &p:remote.vertices) p.z+=5.0;
+
+    SurfaceProjectionOptions options;
+    options.iterations=5;
+    options.max_projection_distance=0.1;
+    auto projected=project_quad_patch_to_surface(
+        remote,patch,base.u_segments,base.v_segments,options);
+    assert(projected.stats.distance_rejected_targets>0);
+    assert(projected.stats.accepted_iterations==0);
+    assert(projected.stats.moved_vertices==0);
+    assert(projected.stats.max_vertex_displacement==0);
+    assert(projected.mesh.vertices==patch.vertices); // values preserved exactly
+  }
+  {
+    // A small allowed radius permits partial but bounded projection without
+    // stepping past the original-position radius on later iterations.
+    QuadPatchOptions base;
+    base.u_segments=12; base.v_segments=12;
+    const auto patch=solve_quad_patch(square_boundary(),base).mesh;
+    SurfaceProjectionOptions options;
+    options.iterations=5;
+    options.max_projection_distance=0.025;
+    const auto projected=project_quad_patch_to_surface(
+        source_grid(28,0.16),patch,base.u_segments,base.v_segments,options);
+    assert(projected.stats.distance_rejected_targets>0);
+    assert(projected.stats.max_vertex_displacement<=0.025+1e-12);
+    for(std::size_t k=0;k<patch.vertices.size();++k) {
+      if(is_boundary(k,base.u_segments,base.v_segments))
+        assert(close(patch.vertices[k],projected.mesh.vertices[k]));
+    }
+  }
+  {
+    // With zero iterations the initial nearest queries already provide the
+    // final RMS. No duplicate final query should run on unchanged geometry.
+    QuadPatchOptions base;
+    base.u_segments=4; base.v_segments=4;
+    const auto patch=solve_quad_patch(square_boundary(),base).mesh;
+    SurfaceProjectionOptions options;
+    options.iterations=0;
+    const auto result=project_quad_patch_to_surface(
+        source_grid(8,0.1),patch,base.u_segments,base.v_segments,options);
+    assert(result.stats.accepted_iterations==0);
+    assert(result.stats.moved_vertices==0);
+    assert(result.stats.initial_rms_distance==result.stats.final_rms_distance);
+    assert(result.stats.closest_queries==9);
   }
   {
     // No interior vertices: no boundary vertex is ever moved.
@@ -125,6 +184,12 @@ int main() {
     SurfaceProjectionOptions bad;
     bad.strength=std::numeric_limits<double>::quiet_NaN();
     bool failed=false;
+    try { (void)project_quad_patch_to_surface(source_grid(4,0.1),patch,3,3,bad); }
+    catch(const std::invalid_argument&) { failed=true; }
+    assert(failed);
+    bad.strength=1.0;
+    bad.max_projection_distance=0.0;
+    failed=false;
     try { (void)project_quad_patch_to_surface(source_grid(4,0.1),patch,3,3,bad); }
     catch(const std::invalid_argument&) { failed=true; }
     assert(failed);
