@@ -266,6 +266,12 @@ int main() {
     try { (void)project_quad_patch_to_surface(source_grid(4,0.1),patch,3,3,bad); }
     catch(const std::invalid_argument&) { failed=true; }
     assert(failed);
+    bad.max_projection_distance=1.0;
+    bad.min_reference_normal_dot=1.5;
+    failed=false;
+    try { (void)project_quad_patch_to_surface(source_grid(4,0.1),patch,3,3,bad); }
+    catch(const std::invalid_argument&) { failed=true; }
+    assert(failed);
   }
   std::cout<<"Guarded surface projection tests passed.\n";
 }
