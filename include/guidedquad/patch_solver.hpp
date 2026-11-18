@@ -27,6 +27,11 @@ struct QuadPatchOptions {
   // while staying within this relative growth in worst side aspect ratio.
   bool quality_guard = true;
   double max_aspect_growth = 0.02; // 2% worst-aspect allowance
+  // TRUE (default): every input boundary vertex is a hard constraint.
+  // A side needs at least (unique input vertices - 1) segments.
+  // FALSE: approximate the input curves to the requested segment count,
+  // and report the lost source-vertex fidelity in max_boundary_error.
+  bool preserve_boundary_vertices = true;
 };
 
 struct QuadPatchMesh {
@@ -39,6 +44,8 @@ struct QuadPatchQuality {
   double worst_edge_aspect_ratio = 1.0; // longest / shortest quad side
   double mean_abs_orthogonality = 0.0;  // mean |cos(corner angle)|, 0 best
   double minimum_face_area = 0.0;      // approximate area (two triangles)
+  double minimum_scaled_jacobian = 1.0; // min signed corner sine (1 best)
+  double max_diagonal_warpage_deg = 0.0; // max angle between split-triangle normals
 };
 
 struct QuadPatchResult {
@@ -49,7 +56,10 @@ struct QuadPatchResult {
 };
 
 // Construct one connected, all-quad chart on a four-sided patch.
-// Hard boundaries are satisfied up to floating-point precision.
+// Hard boundaries are preserved vertex-for-vertex by default. A requested
+// density below the required number of guide segments throws instead of
+// silently simplifying a painted feature.
+// If preserve_boundary_vertices=false, input is approximated and measured.
 // No automatic projection to a curved triangle source is performed in V0.2.
 // Throws on incompatible corners, self-folded/degenerate results or huge grids.
 QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
