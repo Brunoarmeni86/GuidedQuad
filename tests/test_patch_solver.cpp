@@ -58,6 +58,13 @@ int main() {
     assert(patch.mesh.quads.size()==100);
     assert(patch.quality.max_boundary_error < 1e-12);
     assert(patch.quality.minimum_face_area > 0);
+    // The optimizer must not accept a large aspect-ratio regression.
+    assert(patch.quality.worst_edge_aspect_ratio <=
+           baseline.quality.worst_edge_aspect_ratio * 1.020000001);
+    assert(patch.quality.mean_abs_orthogonality <=
+           baseline.quality.mean_abs_orthogonality + 1e-12);
+    assert(patch.initial_quality.worst_edge_aspect_ratio ==
+           baseline.quality.worst_edge_aspect_ratio);
     const auto &bottom_middle=patch.mesh.vertices[5];
     const auto &top_middle=patch.mesh.vertices[10*11+5];
     assert(bottom_middle.y < -0.11);
