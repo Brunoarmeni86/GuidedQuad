@@ -275,7 +275,8 @@ SurfaceProjectionResult project_quad_patch_to_surface(
      opts.min_corner_sine<=0.0||opts.min_corner_sine>=1.0||
      !std::isfinite(opts.min_normal_dot)||opts.min_normal_dot<0.0||
      opts.min_normal_dot>=1.0||opts.iterations>64||
-     opts.backtracking_steps==0||opts.backtracking_steps>20){
+     opts.backtracking_steps==0||opts.backtracking_steps>20||
+     !(opts.max_projection_distance>0.0)){
     throw std::invalid_argument("invalid guarded surface projection options");
   }
   SurfaceProjectionResult output;
@@ -289,19 +290,35 @@ SurfaceProjectionResult project_quad_patch_to_surface(
   if(!interior)return output;
   std::vector<Vec3> targets(patch.vertices.size());
   QuadPatchMesh trial=patch;
+
+  // Collect the initial closest points once. Previously the same nearest
+  // queries ran twice: first to calculate initial RMS, immediately again to
+  // calculate the first iteration's unchanged targets.
   double initial_sum=0.0;
   for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i){
     const std::size_t idx=index(i,j,nu);
-    const Vec3 q=bvh.nearest(patch.vertices[idx]);
-    initial_sum+=sqdist(patch.vertices[idx],q);
+    targets[idx]=bvh.nearest(patch.vertices[idx]);
+    initial_sum+=sqdist(patch.vertices[idx],targets[idx]);
   }
   output.stats.initial_rms_distance=std::sqrt(initial_sum/static_cast<double>(interior));
+  if(opts.iterations==0) {
+    output.stats.final_rms_distance=output.stats.initial_rms_distance;
+    return output;
+  }
 
   for(Id iter=0;iter<opts.iterations;++iter) {
     double max_residual=0.0;
     for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i){
       const std::size_t idx=index(i,j,nu);
-      targets[idx]=bvh.nearest(output.mesh.vertices[idx]);
+      // First iteration reuses the initial RMS queries. Re-query only after
+      // geometry actually changes and the previous closest targets become stale.
+      if(iter>0)targets[idx]=bvh.nearest(output.mesh.vertices[idx]);
+      if(norm(sub(targets[idx],patch.vertices[idx]))>opts.max_projection_distance){
+        // The radius is measured against the ORIGINAL grid, not the last
+        // accepted position; consecutive iterations cannot drift across it.
+        targets[idx]=output.mesh.vertices[idx];
+        ++output.stats.distance_rejected_targets;
+      }
       max_residual=std::max(max_residual,norm(sub(targets[idx],output.mesh.vertices[idx])));
     }
     if(max_residual<=1e-14)break;
