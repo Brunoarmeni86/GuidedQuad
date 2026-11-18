@@ -115,7 +115,6 @@ QuadPatchQuality inspect(const QuadPatchBoundary &boundary, const QuadPatchMesh 
   }
   const double size=distance(minp,maxp);
   const double area_floor=(size*size)*1e-14 / (double(nu)*double(nv));
-  Vec3 previous_row_normal{0,0,0};
   std::vector<Vec3> prev_row(nu);
   double sum_orthogonality=0.0;
   metrics.minimum_face_area=std::numeric_limits<double>::infinity();
@@ -171,7 +170,8 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
   }
   if (!std::isfinite(options.smooth_strength) ||
       options.smooth_strength < 0.0 || options.smooth_strength > 1.0 ||
-      options.smooth_iterations > 5000) {
+      options.smooth_iterations > 5000 ||
+      vertex_count * options.smooth_iterations > 50000000ULL) {
     throw std::invalid_argument("invalid patch smoothing options");
   }
   auto b=boundary;
