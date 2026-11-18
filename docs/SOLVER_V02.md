@@ -33,7 +33,7 @@ A Face Set or standard Blender Color Attribute adapter has not yet been develope
 - **Proves**: a simple independently implemented solver can generate quad topology which follows arbitrary piecewise-linear border guides; it can preserve hard border constraints and reject common local degeneracies.
 - **Does not prove**: superiority to Exoside; good automatic patch decomposition; global loop quality; automatic 4-RoSy singularity placement; exact curved source surface reprojection; UV preservation; local retopology editing.
 - In the first unguarded curved-boundary example, 25 relaxation iterations reduced mean |cos(angle)| from **0.202441 to 0.159981** (better) but raised worst side aspect ratio from **1.22536 to 1.43089** (worse), with boundary deviation exactly 0. These are measured synthetic test data, not an Exoside comparison.
-- Added quality-guarded relaxation: evaluate every candidate iteration and retain only solutions improving orthogonality while limiting the worst aspect ratio to **2%** above the unsmoothed result (configurable). The baseline is preserved if no acceptable candidate exists. Guarded results must be remeasured on real organic models.
+- Added quality-guarded **backtracking** relaxation: test smaller steps until angle quality improves without exceeding a configurable **2%** worst aspect growth; preserve baseline if none qualifies. On the same synthetic boundary example this reduced angle error to **0.198131** (a **2.1%** relative improvement) with worst aspect **1.24986** (within 2% of baseline) and zero boundary error. The more aggressive unguarded smoothing improves angles further but distorts lengths significantly. These values must be retested on real meshes.
 
 ## Next technical steps
 
