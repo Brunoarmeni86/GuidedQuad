@@ -2,52 +2,88 @@
 #include "guidedquad/guide_graph.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
-#include <map>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace guidedquad {
 namespace {
 using Id = std::uint32_t;
-using EdgeKey = std::pair<Id, Id>;
+using Key = std::uint64_t;
 
-EdgeKey ordered(Id a, Id b) { return {std::min(a, b), std::max(a, b)}; }
+// Pack two 32-bit indices collision-free. Sorting each pair also makes keys
+// insensitive to triangle winding and edge traversal direction.
+Key edge_key(Id a, Id b) {
+  if (a > b) std::swap(a, b);
+  return (Key(a) << 32) | Key(b);
+}
 
 void validate(const TriangleMesh &mesh) {
-  if (mesh.vertices.size() > std::numeric_limits<Id>::max()) {
-    throw std::invalid_argument("vertex count exceeds 32-bit indices");
+  if (mesh.vertices.size() > std::numeric_limits<Id>::max() ||
+      mesh.triangles.size() > std::numeric_limits<Id>::max()) {
+    throw std::invalid_argument("mesh exceeds supported 32-bit index range");
   }
   for (const Vec3 &p : mesh.vertices) {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
-      throw std::invalid_argument("mesh has non-finite coordinates");
+      throw std::invalid_argument("mesh contains non-finite coordinates");
     }
   }
   for (const auto &tri : mesh.triangles) {
     if (tri[0] >= mesh.vertices.size() || tri[1] >= mesh.vertices.size() ||
         tri[2] >= mesh.vertices.size() || tri[0] == tri[1] ||
         tri[1] == tri[2] || tri[2] == tri[0]) {
-      throw std::invalid_argument("mesh has invalid or degenerate triangle indices");
+      throw std::invalid_argument("mesh contains invalid triangle indices");
     }
   }
 }
 
+// Avoid overflow in (threshold - a) / (b - a) for large finite scalars.
+// Both endpoints must be on opposite sides of the chosen half-open contour.
+double contour_fraction(double a, double b, double threshold) {
+  if (a == threshold) return 0.0;
+  if (b == threshold) return 1.0;
+  const double scale = std::max({std::abs(a), std::abs(b), std::abs(threshold)});
+  if (scale == 0.0) throw std::invalid_argument("contour has zero dynamic range");
+  const double an = a / scale, bn = b / scale, level = threshold / scale;
+  const double den = bn - an;
+  if (den == 0.0) {
+    throw std::invalid_argument("contour endpoints indistinguishable numerically");
+  }
+  const double t = (level - an) / den;
+  if (!std::isfinite(t)) throw std::invalid_argument("non-finite contour interpolation");
+  return std::clamp(t, 0.0, 1.0);
+}
+
 struct GraphAssembler {
   GuideGraph result;
-  std::map<EdgeKey, Id> node_ids;
-  std::map<EdgeKey, bool> unique_graph_edges;
+  std::unordered_map<Key, Id> node_ids;
+  std::unordered_set<Key> graph_edges;
 
   Id node(Id a, Id b, double t, const TriangleMesh &mesh) {
-    if (t <= 1e-10) { b = a; t = 0.0; }
-    else if (t >= 1.0 - 1e-10) { a = b; t = 0.0; }
+    if (!std::isfinite(t) || t < 0.0 || t > 1.0) {
+      throw std::invalid_argument("invalid interpolation fraction");
+    }
+    // Snap *exact* endpoints only. Epsilon snapping can erase very small
+    // painted features on dense meshes.
+    if (t == 0.0) { b = a; }
+    else if (t == 1.0) { a = b; t = 0.0; }
+    if (a == b) t = 0.0;
     if (a > b) { std::swap(a, b); t = 1.0 - t; }
-    const EdgeKey key{a, b};
-    auto it = node_ids.find(key);
-    if (it != node_ids.end()) { return it->second; }
-    Vec3 p{mesh.vertices[a].x * (1.0 - t) + mesh.vertices[b].x * t,
-           mesh.vertices[a].y * (1.0 - t) + mesh.vertices[b].y * t,
-           mesh.vertices[a].z * (1.0 - t) + mesh.vertices[b].z * t};
+    const Key key = edge_key(a, b);
+    const auto it = node_ids.find(key);
+    if (it != node_ids.end()) return it->second;
+    if (result.nodes.size() >= std::numeric_limits<Id>::max()) {
+      throw std::overflow_error("too many guide nodes");
+    }
+    const Vec3 &pa = mesh.vertices[a], &pb = mesh.vertices[b];
+    const Vec3 p{pa.x * (1.0 - t) + pb.x * t,
+                 pa.y * (1.0 - t) + pb.y * t,
+                 pa.z * (1.0 - t) + pb.z * t};
     const Id id = static_cast<Id>(result.nodes.size());
     result.nodes.push_back({p, a, b, t});
     node_ids.emplace(key, id);
@@ -55,27 +91,41 @@ struct GraphAssembler {
   }
 
   void connect(Id a, Id b) {
-    if (a == b) { return; }
-    const EdgeKey key = ordered(a, b);
-    if (unique_graph_edges.emplace(key, true).second) {
-      result.edges.push_back({key.first, key.second});
+    if (a == b) return;
+    const Key key = edge_key(a, b);
+    if (graph_edges.insert(key).second) {
+      result.edges.push_back({static_cast<Id>(key >> 32), static_cast<Id>(key)});
     }
   }
+};
+
+struct EdgeUse {
+  Key key;
+  Id face;
 };
 } // namespace
 
 void build_paths(GuideGraph &graph) {
   graph.paths.clear();
+  if (graph.nodes.size() > std::numeric_limits<Id>::max() ||
+      graph.edges.size() > std::numeric_limits<Id>::max()) {
+    throw std::invalid_argument("guide graph exceeds 32-bit index range");
+  }
+
   std::vector<std::vector<Id>> incident(graph.nodes.size());
+  std::unordered_set<Key> seen;
+  seen.reserve(graph.edges.size());
   for (Id e = 0; e < graph.edges.size(); ++e) {
     const GuideEdge &edge = graph.edges[e];
-    if (edge.a >= graph.nodes.size() || edge.b >= graph.nodes.size()) {
-      throw std::invalid_argument("guide edge references nonexistent node");
+    if (edge.a >= graph.nodes.size() || edge.b >= graph.nodes.size() ||
+        edge.a == edge.b || !seen.insert(edge_key(edge.a, edge.b)).second) {
+      throw std::invalid_argument("guide graph has an invalid or duplicate edge");
     }
     incident[edge.a].push_back(e);
     incident[edge.b].push_back(e);
   }
-  for (auto &list : incident) std::sort(list.begin(), list.end());
+  // Edge indices are visited in ascending order, so incident lists are already
+  // sorted: sorting every vertex again is unnecessary on high-resolution meshes.
   std::vector<bool> visited(graph.edges.size(), false);
   const auto walk = [&](Id first_node, Id first_edge) {
     GuidePath path;
@@ -105,11 +155,11 @@ void build_paths(GuideGraph &graph) {
   for (Id e = 0; e < graph.edges.size(); ++e) {
     if (!visited[e]) walk(graph.edges[e].a, e);
   }
-  for (const auto &list : incident) {
-    if (list.size() > 2) {
-      graph.warnings.emplace_back("guide junction detected (degree > 2): manual or solver resolution required");
-      break;
-    }
+  std::size_t junctions = 0;
+  for (const auto &list : incident) if (list.size() > 2) ++junctions;
+  if (junctions) {
+    graph.warnings.emplace_back(std::to_string(junctions) +
+                                " guide junction(s) require manual or solver resolution");
   }
 }
 
@@ -120,27 +170,46 @@ GuideGraph extract_region_boundaries(const TriangleMesh &mesh,
   if (regions.size() != mesh.triangles.size()) {
     throw std::invalid_argument("one region ID is required per triangle");
   }
-  std::map<EdgeKey, std::vector<Id>> incidents;
+  if (mesh.triangles.size() > std::numeric_limits<std::size_t>::max() / 3) {
+    throw std::overflow_error("too many triangle edges");
+  }
+
+  // Contiguous sorted incidence list avoids thousands of per-edge heap
+  // allocations from std::map<Key, vector<FaceId>> and retains stable output.
+  std::vector<EdgeUse> uses;
+  uses.reserve(mesh.triangles.size() * 3);
   for (Id f = 0; f < mesh.triangles.size(); ++f) {
     const auto &tri = mesh.triangles[f];
     for (int i = 0; i < 3; ++i) {
-      incidents[ordered(tri[i], tri[(i + 1) % 3])].push_back(f);
+      uses.push_back({edge_key(tri[i], tri[(i + 1) % 3]), f});
     }
   }
+  std::sort(uses.begin(), uses.end(), [](const EdgeUse &a, const EdgeUse &b) {
+    return a.key < b.key;
+  });
+
   GraphAssembler out;
-  for (const auto &entry : incidents) {
-    const auto &faces = entry.second;
-    if (faces.size() > 2) {
-      out.result.warnings.emplace_back("non-manifold input edge skipped");
-      continue;
+  std::size_t nonmanifold = 0;
+  for (std::size_t i = 0; i < uses.size();) {
+    std::size_t j = i + 1;
+    while (j < uses.size() && uses[j].key == uses[i].key) ++j;
+    const std::size_t count = j - i;
+    if (count > 2) {
+      ++nonmanifold;
+    } else {
+      const bool boundary = (count == 2 && regions[uses[i].face] != regions[uses[i + 1].face]) ||
+                            (include_mesh_border && count == 1);
+      if (boundary) {
+        const Id a = static_cast<Id>(uses[i].key >> 32);
+        const Id b = static_cast<Id>(uses[i].key);
+        out.connect(out.node(a, a, 0.0, mesh), out.node(b, b, 0.0, mesh));
+      }
     }
-    const bool boundary = (faces.size() == 2 && regions[faces[0]] != regions[faces[1]]) ||
-                          (include_mesh_border && faces.size() == 1);
-    if (boundary) {
-      const Id a = out.node(entry.first.first, entry.first.first, 0.0, mesh);
-      const Id b = out.node(entry.first.second, entry.first.second, 0.0, mesh);
-      out.connect(a, b);
-    }
+    i = j;
+  }
+  if (nonmanifold) {
+    out.result.warnings.emplace_back(std::to_string(nonmanifold) +
+                                     " non-manifold source edge(s) skipped");
   }
   build_paths(out.result);
   return out.result;
@@ -153,13 +222,14 @@ GuideGraph extract_scalar_contours(const TriangleMesh &mesh,
   if (values.size() != mesh.vertices.size() || !std::isfinite(threshold)) {
     throw std::invalid_argument("invalid scalar array or contour threshold");
   }
-  for (double value : values) if (!std::isfinite(value)) {
-    throw std::invalid_argument("non-finite scalar value");
+  for (const double value : values) {
+    if (!std::isfinite(value)) throw std::invalid_argument("non-finite scalar value");
   }
+  // A fixed >= convention is independent of vertex numbering. Exact-threshold
+  // plateaus are treated as inside; all-equal triangles emit no arbitrary lines.
   std::vector<bool> high(values.size());
-  for (Id v = 0; v < values.size(); ++v) {
-    high[v] = (values[v] > threshold) || (values[v] == threshold && (v % 2 == 0));
-  }
+  for (Id v = 0; v < values.size(); ++v) high[v] = values[v] >= threshold;
+
   GraphAssembler out;
   for (const auto &tri : mesh.triangles) {
     Id crossings[3];
@@ -167,10 +237,8 @@ GuideGraph extract_scalar_contours(const TriangleMesh &mesh,
     for (int i = 0; i < 3; ++i) {
       const Id a = tri[i], b = tri[(i + 1) % 3];
       if (high[a] == high[b]) continue;
-      double t = 0.5;
-      const double diff = values[b] - values[a];
-      if (diff != 0.0) t = (threshold - values[a]) / diff;
-      crossings[count++] = out.node(a, b, std::clamp(t, 0.0, 1.0), mesh);
+      const double t = contour_fraction(values[a], values[b], threshold);
+      crossings[count++] = out.node(a, b, t, mesh);
     }
     if (count == 2) out.connect(crossings[0], crossings[1]);
   }
