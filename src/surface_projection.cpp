@@ -303,15 +303,18 @@ PreparedSurfaceProjector::~PreparedSurfaceProjector() = default;
 PreparedSurfaceProjector::PreparedSurfaceProjector(PreparedSurfaceProjector &&) noexcept = default;
 PreparedSurfaceProjector &PreparedSurfaceProjector::operator=(PreparedSurfaceProjector &&) noexcept = default;
 std::uint32_t PreparedSurfaceProjector::active_triangle_count() const {
+  if(!impl_) throw std::logic_error("projector was moved from");
   return impl_->bvh.active_count();
 }
 std::uint32_t PreparedSurfaceProjector::skipped_degenerate_triangles() const {
+  if(!impl_) throw std::logic_error("projector was moved from");
   return impl_->bvh.skipped();
 }
 
 SurfaceProjectionResult PreparedSurfaceProjector::project(
     const QuadPatchMesh &patch,
     Id nu,Id nv,const SurfaceProjectionOptions &opts) const {
+  if(!impl_) throw std::logic_error("projector was moved from");
   if(!std::isfinite(opts.strength)||opts.strength<=0.0||opts.strength>1.0||
      !std::isfinite(opts.min_area_ratio)||opts.min_area_ratio<=0.0||
      opts.min_area_ratio>1.0||!std::isfinite(opts.min_corner_sine)||
