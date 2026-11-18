@@ -224,41 +224,47 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
   output.quality=output.initial_quality;
 
   if (options.smooth_iterations && options.smooth_strength && nu>1 && nv>1) {
-    std::vector<Vec3> next=mesh.vertices;
-    std::vector<Vec3> best=mesh.vertices;
+    QuadPatchMesh trial=mesh; // same topology; only interior coordinates change
     const double aspect_limit=output.initial_quality.worst_edge_aspect_ratio*
                               (1.0+options.max_aspect_growth);
     for (std::uint32_t iteration=0;iteration<options.smooth_iterations;++iteration) {
-      // Deterministic Jacobi relaxation of interior points only.
-      for (std::uint32_t j=1;j<nv;++j) for (std::uint32_t i=1;i<nu;++i) {
-        const std::size_t k=index(i,j,nu);
-        const Vec3 average=scale(add(add(mesh.vertices[index(i-1,j,nu)],
-                                          mesh.vertices[index(i+1,j,nu)]),
-                                     add(mesh.vertices[index(i,j-1,nu)],
-                                         mesh.vertices[index(i,j+1,nu)])),0.25);
-        next[k]=add(scale(mesh.vertices[k],1.0-options.smooth_strength),
-                    scale(average,options.smooth_strength));
+      bool accepted=false;
+      double alpha=options.smooth_strength;
+      // Backtracking prevents a large relaxation step from destroying side
+      // aspect or flipping cells. A smaller legal step is preferred to no step.
+      const int max_attempts=options.quality_guard ? 10 : 1;
+      for (int attempt=0;attempt<max_attempts;++attempt) {
+        for (std::uint32_t j=1;j<nv;++j) for (std::uint32_t i=1;i<nu;++i) {
+          const std::size_t k=index(i,j,nu);
+          const Vec3 average=scale(add(add(mesh.vertices[index(i-1,j,nu)],
+                                            mesh.vertices[index(i+1,j,nu)]),
+                                       add(mesh.vertices[index(i,j-1,nu)],
+                                           mesh.vertices[index(i,j+1,nu)])),0.25);
+          trial.vertices[k]=add(scale(mesh.vertices[k],1.0-alpha),
+                                scale(average,alpha));
+        }
+        QuadPatchQuality candidate;
+        bool valid=true;
+        try {
+          candidate=inspect(b,trial,nu,nv);
+        } catch (const std::runtime_error &) {
+          valid=false;
+          if (!options.quality_guard) throw;
+        }
+        const bool better=valid && (!options.quality_guard ||
+            (candidate.worst_edge_aspect_ratio <= aspect_limit &&
+             candidate.mean_abs_orthogonality+1e-12 < output.quality.mean_abs_orthogonality));
+        if (better) {
+          mesh.vertices.swap(trial.vertices);
+          output.quality=candidate;
+          ++output.accepted_smooth_iterations;
+          accepted=true;
+          break;
+        }
+        alpha*=0.5;
       }
-      mesh.vertices.swap(next);
-      QuadPatchQuality candidate;
-      try {
-        candidate=inspect(b,mesh,nu,nv);
-      } catch (const std::runtime_error &) {
-        if (!options.quality_guard) throw;
-        break; // reject invalid candidate, preserve best valid quad mesh
-      }
-      // Never silently trade badly distorted edge lengths for an angular gain.
-      // A caller can explicitly opt out of this quality guard.
-      const bool accept=!options.quality_guard ||
-          (candidate.worst_edge_aspect_ratio <= aspect_limit &&
-           candidate.mean_abs_orthogonality+1e-12 < output.quality.mean_abs_orthogonality);
-      if (accept) {
-        best=mesh.vertices;
-        output.quality=candidate;
-        output.accepted_smooth_iterations=iteration+1;
-      }
+      if (!accepted) break; // stationary point or constraints saturated
     }
-    mesh.vertices.swap(best);
   }
   return output;
 }
