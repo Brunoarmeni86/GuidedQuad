@@ -177,11 +177,14 @@ std::size_t index(std::uint32_t i, std::uint32_t j, std::uint32_t nu) {
   return static_cast<std::size_t>(j)*(static_cast<std::size_t>(nu)+1)+i;
 }
 
-QuadPatchQuality inspect(const QuadPatchBoundary &boundary, const QuadPatchMesh &mesh,
-                         std::uint32_t nu, std::uint32_t nv) {
-  const auto bottom=resample(boundary.bottom,nu), top=resample(boundary.top,nu);
-  const auto left=resample(boundary.left,nv), right=resample(boundary.right,nv);
+QuadPatchQuality inspect(const QuadPatchBoundary &sampled, const QuadPatchMesh &mesh,
+                         std::uint32_t nu, std::uint32_t nv, double input_error) {
+  // Boundary samples and their source error are cached once per solve.
+  // Quality search may evaluate this function many times per iteration.
+  const auto &bottom=sampled.bottom, &top=sampled.top;
+  const auto &left=sampled.left, &right=sampled.right;
   QuadPatchQuality metrics;
+  metrics.max_boundary_error=input_error;
   for (std::uint32_t i=0; i<=nu; ++i) {
     metrics.max_boundary_error=std::max(metrics.max_boundary_error,
         distance(mesh.vertices[index(i,0,nu)],bottom[i]));
@@ -265,8 +268,25 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
   }
   auto b=boundary;
   ensure_matching_corners(b);
-  const auto bottom=resample(b.bottom,nu),top=resample(b.top,nu);
-  const auto left=resample(b.left,nv),right=resample(b.right,nv);
+  const bool strict=options.preserve_boundary_vertices;
+  const auto bottom=sample_boundary(b.bottom,nu,strict);
+  const auto top=sample_boundary(b.top,nu,strict);
+  const auto left=sample_boundary(b.left,nv,strict);
+  const auto right=sample_boundary(b.right,nv,strict);
+  const QuadPatchBoundary sampled{bottom,right,top,left};
+  // Canonicalizing nearly matching corners is a small real input deviation.
+  double input_error=std::max({
+      distance(boundary.left.front(),b.left.front()),
+      distance(boundary.left.back(),b.left.back()),
+      distance(boundary.right.front(),b.right.front()),
+      distance(boundary.right.back(),b.right.back())});
+  if (!strict) {
+    input_error=std::max({input_error,
+        source_vertex_deviation(b.bottom,bottom),
+        source_vertex_deviation(b.top,top),
+        source_vertex_deviation(b.left,left),
+        source_vertex_deviation(b.right,right)});
+  }
   const Vec3 p00=bottom.front(), p10=bottom.back();
   const Vec3 p01=top.front(), p11=top.back();
   QuadPatchResult output;
@@ -307,7 +327,7 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
   }
   // First verify the unoptimized Coons topology. A bad initial layout must
   // not be concealed by smoothing, because the boundary chart is invalid.
-  output.initial_quality=inspect(b,mesh,nu,nv);
+  output.initial_quality=inspect(sampled,mesh,nu,nv,input_error);
   output.quality=output.initial_quality;
 
   if (options.smooth_iterations && options.smooth_strength && nu>1 && nv>1) {
@@ -333,7 +353,7 @@ QuadPatchResult solve_quad_patch(const QuadPatchBoundary &boundary,
         QuadPatchQuality candidate;
         bool valid=true;
         try {
-          candidate=inspect(b,trial,nu,nv);
+          candidate=inspect(sampled,trial,nu,nv,input_error);
         } catch (const std::runtime_error &) {
           valid=false;
           if (!options.quality_guard) throw;
