@@ -58,6 +58,11 @@ class PreparedQuadCollisionChecker {
       std::size_t max_reported_pairs=16);
   std::uint64_t refit_count() const;
   std::uint64_t dirty_update_count() const;
+  // Successful partial box/node updates; full fallback when geometry no
+  // longer fits the checker's original normalized coordinate frame.
+  std::uint64_t local_refit_count() const;
+  std::uint64_t full_refit_fallback_count() const;
+  std::uint64_t local_bvh_node_updates() const;
 
  private:
   struct Impl;
