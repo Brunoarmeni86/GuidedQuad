@@ -157,6 +157,37 @@ double feature_distance(Vec3 p,const SharedFeature &shared,
   }
   return 0.0;
 }
+// If the AABB intersection is contained wholly inside the exact shared
+// vertex or shared edge, every possible geometric intersection must be a
+// legal contact. This is conservative and only skips narrowphase when it can
+// be proven unnecessary from bounds alone; warped/folded neighbors still go
+// through the full triangle tests.
+bool bounds_touch_only_shared_feature(
+    const Aabb &a,const Aabb &b,const SharedFeature &shared,
+    const std::vector<Vec3> &positions) {
+  if(shared.count==0||shared.count>2)return false;
+  const Vec3 lo{std::max(a.lo.x,b.lo.x),std::max(a.lo.y,b.lo.y),
+                std::max(a.lo.z,b.lo.z)};
+  const Vec3 hi{std::min(a.hi.x,b.hi.x),std::min(a.hi.y,b.hi.y),
+                std::min(a.hi.z,b.hi.z)};
+  // A small gap can be admitted by the broadphase tolerance; preserve the
+  // full narrowphase for those cases to avoid numerical false negatives.
+  if(lo.x>hi.x||lo.y>hi.y||lo.z>hi.z)return false;
+  constexpr double tol=8e-15; // normalized unit-extent, smaller than SAT eps
+  if(shared.count==1) {
+    const Vec3 p=positions[shared.indices[0]];
+    return std::abs(lo.x-p.x)<=tol&&std::abs(hi.x-p.x)<=tol&&
+           std::abs(lo.y-p.y)<=tol&&std::abs(hi.y-p.y)<=tol&&
+           std::abs(lo.z-p.z)<=tol&&std::abs(hi.z-p.z)<=tol;
+  }
+  for(int mask=0;mask<8;++mask) {
+    const Vec3 p{mask&1?hi.x:lo.x,mask&2?hi.y:lo.y,
+                 mask&4?hi.z:lo.z};
+    if(feature_distance(p,shared,positions)>tol)return false;
+  }
+  return true;
+}
+
 bool point_in_triangle(Vec3 p,const Triangle &t,Vec3 n){
   for(int i=0;i<3;++i) {
     const Vec3 edge=sub(t.v[(i+1)%3],t.v[i]);
@@ -275,7 +306,14 @@ class QuadBvh {
     const auto &qa=mesh_.quads[a],&qb=mesh_.quads[b];
     if(!boxes_[a].overlaps(boxes_[b]))return true;
     const SharedFeature shared=shared_vertices(qa,qb);
-    if(shared.count)++report_.adjacent_pairs_checked;
+    if(shared.count) {
+      ++report_.adjacent_pairs_checked;
+      if(bounds_touch_only_shared_feature(boxes_[a],boxes_[b],
+                                          shared,positions_)) {
+        ++report_.adjacent_pairs_ignored;
+        return true;
+      }
+    }
     ++report_.candidate_quad_pairs;
     for(int ia=0;ia<2;++ia){
       const Triangle ta=tri(a,ia);
