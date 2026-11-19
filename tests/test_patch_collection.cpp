@@ -66,10 +66,11 @@ int main() {
     const auto r=find_patch_collection_intersections({a,b},{{0,2,1,0}});
     assert(r.collisions.empty());
     // An overlapping quad sharing the corner must NOT be hidden by welding.
-    const auto overlap=one_quad(0.5,0.5);
-    const auto bad=find_patch_collection_intersections({a,overlap},{{0,2,1,2}});
-    // The weld above would have mismatched coordinates; checked below.
-    (void)bad;
+    QuadPatchMesh overlap;
+    overlap.vertices={{1,1,0},{1,0.5,0},{0.5,0.5,0},{0.5,1,0}};
+    overlap.quads={{0,1,2,3}};
+    const auto bad=find_patch_collection_intersections({a,overlap},{{0,2,1,0}});
+    assert(bad.collisions.size()==1);
   }
   {
     // Invalid seam mapping must be rejected rather than silently welding
