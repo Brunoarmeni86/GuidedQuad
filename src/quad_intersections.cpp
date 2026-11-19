@@ -664,12 +664,15 @@ struct PreparedQuadCollisionChecker::Impl {
   QuadBvh bvh;
   std::vector<Vec3> accepted_positions;
   std::vector<std::vector<Id>> incident_quads;
+  std::vector<std::uint32_t> face_mark_epoch;
+  std::uint32_t face_epoch=0;
   std::uint64_t refits=0,dirty_updates=0;
   std::uint64_t local_refits=0,full_refit_fallbacks=0;
   bool clean_baseline=false;
   explicit Impl(const QuadPatchMesh &input)
       : mesh(input), bvh(mesh,16), accepted_positions(input.vertices),
         incident_quads(input.vertices.size()) {
+    face_mark_epoch.assign(input.quads.size(),0);
     for(Id face=0;face<input.quads.size();++face)
       for(Id vertex:input.quads[face])
         incident_quads[vertex].push_back(face);
@@ -713,7 +716,11 @@ QuadIntersectionReport PreparedQuadCollisionChecker::check_positions_dirty(
     if(v>=positions.size())throw std::invalid_argument("dirty vertex index invalid");
     declared[v]=1;
   }
-  std::vector<std::uint8_t> faces(impl_->mesh.quads.size(),0);
+  if(impl_->face_epoch==std::numeric_limits<std::uint32_t>::max()) {
+    std::fill(impl_->face_mark_epoch.begin(),impl_->face_mark_epoch.end(),0);
+    impl_->face_epoch=0;
+  }
+  ++impl_->face_epoch;
   std::vector<Id> changed_faces;
   std::vector<Id> changed_vertices;
   changed_vertices.reserve(dirty_vertices.size());
@@ -726,7 +733,10 @@ QuadIntersectionReport PreparedQuadCollisionChecker::check_positions_dirty(
     if(changed) {
       changed_vertices.push_back(static_cast<Id>(k));
       for(Id face:impl_->incident_quads[k]) {
-        if(!faces[face]){faces[face]=1;changed_faces.push_back(face);}
+        if(impl_->face_mark_epoch[face]!=impl_->face_epoch) {
+          impl_->face_mark_epoch[face]=impl_->face_epoch;
+          changed_faces.push_back(face);
+        }
       }
     }
   }
