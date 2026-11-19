@@ -33,6 +33,9 @@ jobs:
       - name: Persistent collision BVH speed comparison
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         run: ctest --test-dir build -C Release -V -R "^guidedquad_refit$"
+      - name: Dirty-face collision BVH benchmark
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: ctest --test-dir build -C Release -V -R "^guidedquad_dirty$"
 
   sanitizer-check:
     name: ASan + UBSan (Linux)
