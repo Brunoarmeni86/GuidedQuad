@@ -173,7 +173,7 @@ bool bounds_touch_only_shared_feature(
   // A small gap can be admitted by the broadphase tolerance; preserve the
   // full narrowphase for those cases to avoid numerical false negatives.
   if(lo.x>hi.x||lo.y>hi.y||lo.z>hi.z)return false;
-  constexpr double tol=8e-15; // normalized unit-extent, smaller than SAT eps
+  constexpr double tol=2e-15; // normalized unit extent, below SAT separation tolerance
   if(shared.count==1) {
     const Vec3 p=positions[shared.indices[0]];
     return std::abs(lo.x-p.x)<=tol&&std::abs(hi.x-p.x)<=tol&&
