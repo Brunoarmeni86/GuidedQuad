@@ -446,6 +446,10 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
     return output;
   }
 
+  bool collision_baseline_clean=true;
+  std::vector<Id> dirty_vertices;
+  dirty_vertices.reserve(static_cast<std::size_t>(interior));
+
   for(Id iter=0;iter<opts.iterations;++iter) {
     double max_residual=0.0;
     for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i){
@@ -467,19 +471,36 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
     bool accepted=false;
     double alpha=opts.strength;
     for(Id attempt=0;attempt<opts.backtracking_steps;++attempt) {
+      dirty_vertices.clear();
       for(Id j=1;j<nv;++j)for(Id i=1;i<nu;++i){
         const std::size_t idx=index(i,j,nu);
         trial.vertices[idx]=add(mul(output.mesh.vertices[idx],1.0-alpha),
                                  mul(targets[idx],alpha));
+        const Vec3 before=output.mesh.vertices[idx],after=trial.vertices[idx];
+        if(before.x!=after.x||before.y!=after.y||before.z!=after.z)
+          dirty_vertices.push_back(static_cast<Id>(idx));
       }
       const bool locally_valid=valid_candidate(trial,refs,opts);
       bool globally_valid=true;
       if(locally_valid && opts.reject_self_intersections) {
         ++output.stats.collision_validation_passes;
-        // Full triangle-local validity was checked immediately above; the
-        // updated BVH checks non-local intersections without re-sorting quads.
-        globally_valid=collision->check_positions(trial.vertices,1).pairs.empty();
-        ++output.stats.collision_bvh_refits;
+        const std::uint64_t before=collision->refit_count();
+        // Dirty checks require an already verified clean source state.
+        // Full checks are preferable if most of the chart is moving.
+        if(collision_baseline_clean &&
+           dirty_vertices.size()*6 < trial.vertices.size()) {
+          const auto report=collision->check_positions_dirty(
+              trial.vertices,dirty_vertices,1);
+          ++output.stats.collision_dirty_passes;
+          output.stats.collision_dirty_face_queries+=report.dirty_face_queries;
+          globally_valid=report.pairs.empty();
+          // Rejected dirty updates automatically restore the last accepted
+          // collision-free BVH, so the next backtracking attempt is safe.
+        } else {
+          globally_valid=collision->check_positions(trial.vertices,1).pairs.empty();
+          collision_baseline_clean=globally_valid;
+        }
+        output.stats.collision_bvh_refits+=collision->refit_count()-before;
         if(!globally_valid) ++output.stats.collision_rejected_steps;
       }
       if(locally_valid && globally_valid){
