@@ -89,7 +89,14 @@ Vec2 project(Vec3 p,int drop) {
          drop==1?Vec2{p.x,p.z}:Vec2{p.x,p.y};
 }
 double orient(Vec2 a,Vec2 b,Vec2 c) {
-  return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+  // Use extended intermediate precision when supported (Linux/macOS).
+  // Windows long double may be identical to double: this is not a substitute
+  // for exact orientation predicates in pathological meshes.
+  const long double abx=static_cast<long double>(b.x)-a.x;
+  const long double aby=static_cast<long double>(b.y)-a.y;
+  const long double acx=static_cast<long double>(c.x)-a.x;
+  const long double acy=static_cast<long double>(c.y)-a.y;
+  return static_cast<double>(abx*acy-aby*acx);
 }
 double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
   int drop=0;
@@ -98,7 +105,12 @@ double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
   const Vec2 ba[3]={project(b.v[0],drop),project(b.v[1],drop),project(b.v[2],drop)};
   const double winding=orient(ba[0],ba[1],ba[2])>=0.0?1.0:-1.0;
   std::vector<Vec2> poly={project(a.v[0],drop),project(a.v[1],drop),project(a.v[2],drop)};
-  const double eps=4e-15;
+  const Vec2 aa[3]={project(a.v[0],drop),project(a.v[1],drop),project(a.v[2],drop)};
+  const double area_a=0.5*std::abs(orient(aa[0],aa[1],aa[2]));
+  const double area_b=0.5*std::abs(orient(ba[0],ba[1],ba[2]));
+  // Area predicates must scale with *local triangle area*, not the whole
+  // sculpt bounding box. A fixed 1e-12 tolerance erased 2e-7 sized quads.
+  const double eps=std::max(1e-28,1e-12*std::min(area_a,area_b));
   for(int edge=0;edge<3;++edge) {
     const Vec2 p=ba[edge],q=ba[(edge+1)%3];
     std::vector<Vec2> clipped;
@@ -193,7 +205,18 @@ bool illegal_adjacent_intersection(const Triangle &a,const Triangle &b,
   bool coplanar=parallel>1.0-1e-10;
   for(Vec3 p:b.v)if(std::abs(dot(sub(p,a.v[0]),unit))>1e-10)
     coplanar=false;
-  if(coplanar)return coplanar_overlap_area(a,b,n1)>1e-13;
+  if(coplanar) {
+    int drop=0;
+    if(std::abs(n1.y)>std::abs(n1.x))drop=1;
+    if(std::abs(n1.z)>std::abs(axis(n1,drop)))drop=2;
+    const auto area=[&](const Triangle &t){
+      return 0.5*std::abs(orient(project(t.v[0],drop),
+                                 project(t.v[1],drop),
+                                 project(t.v[2],drop)));
+    };
+    const double threshold=std::max(1e-28,1e-12*std::min(area(a),area(b)));
+    return coplanar_overlap_area(a,b,n1)>threshold;
+  }
   return edge_crosses_triangle_away(a,b,shared,positions)||
          edge_crosses_triangle_away(b,a,shared,positions);
 }
