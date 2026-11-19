@@ -87,6 +87,29 @@ int main() {
              <<projected.stats.final_rms_distance<<'\n';
   }
   {
+    // Only a small bump in the reference surface moves a handful of grid
+    // vertices. The projection integration must select dirty collision
+    // validation while preserving every hard-guide boundary vertex.
+    QuadPatchOptions opts;
+    opts.u_segments=16;opts.v_segments=16;
+    const auto patch=solve_quad_patch(square_boundary(),opts).mesh;
+    auto reference=source_grid(16,0.0);
+    reference.vertices[8*17+8].z=0.03;
+    SurfaceProjectionOptions project_opts;
+    project_opts.iterations=2;
+    const auto projected=project_quad_patch_to_surface(
+        reference,patch,16,16,project_opts);
+    assert(projected.stats.accepted_iterations>0);
+    assert(projected.stats.collision_bvh_builds==1);
+    assert(projected.stats.collision_dirty_passes>0);
+    assert(projected.stats.collision_dirty_face_queries>0);
+    assert(projected.stats.final_rms_distance<
+           projected.stats.initial_rms_distance);
+    for(std::size_t i=0;i<patch.vertices.size();++i)
+      if(is_boundary(i,16,16))
+        assert(close(projected.mesh.vertices[i],patch.vertices[i]));
+  }
+  {
     // PreparedBVH owns an immutable copy. Project multiple different patches
     // through one reference index even after the original mesh is destroyed.
     const auto build=[]() {
