@@ -397,10 +397,15 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
   SurfaceProjectionResult output;
   output.mesh=patch;
   const auto refs=validate_input(patch,nu,nv);
+  // Keep one output-quad tree for every candidate and backtracking attempt;
+  // only per-face bounds change, the patch quad indices remain fixed.
+  std::unique_ptr<PreparedQuadCollisionChecker> collision;
   if(opts.reject_self_intersections) {
+    collision.reset(new PreparedQuadCollisionChecker(patch));
+    ++output.stats.collision_bvh_builds;
     ++output.stats.collision_validation_passes;
-    if(!find_quad_self_intersections(patch,1).pairs.empty()) {
-      throw std::invalid_argument("input patch contains nonadjacent quad self-intersections");
+    if(!collision->check_initial(1).pairs.empty()) {
+      throw std::invalid_argument("input patch contains quad self-intersections");
     }
   }
   const std::uint64_t interior=nu>1&&nv>1?std::uint64_t(nu-1)*(nv-1):0;
@@ -471,7 +476,10 @@ SurfaceProjectionResult PreparedSurfaceProjector::project(
       bool globally_valid=true;
       if(locally_valid && opts.reject_self_intersections) {
         ++output.stats.collision_validation_passes;
-        globally_valid=find_quad_self_intersections(trial,1).pairs.empty();
+        // Full triangle-local validity was checked immediately above; the
+        // updated BVH checks non-local intersections without re-sorting quads.
+        globally_valid=collision->check_positions(trial.vertices,1).pairs.empty();
+        ++output.stats.collision_bvh_refits;
         if(!globally_valid) ++output.stats.collision_rejected_steps;
       }
       if(locally_valid && globally_valid){

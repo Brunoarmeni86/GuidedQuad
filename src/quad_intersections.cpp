@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <numeric>
 #include <stdexcept>
 #include <vector>
@@ -46,8 +48,11 @@ bool separated_on_axis(const Triangle &a,const Triangle &b,Vec3 direction) {
     amin=std::min(amin,av);amax=std::max(amax,av);
     bmin=std::min(bmin,bv);bmax=std::max(bmax,bv);
   }
-  // Tolerance for round-off; touching is conservatively considered collision.
-  return amax<bmin-1e-13 || bmax<amin-1e-13;
+  // The geometry is normalized to unit-scale. The previous 1e-13 fixed
+  // tolerance incorrectly classified distinct parallel layers separated by
+  // ~1e-14 as collisions. Keep a smaller conservative numeric error margin.
+  constexpr double epsilon=4e-15;
+  return amax<bmin-epsilon || bmax<amin-epsilon;
 }
 
 bool triangle_intersection(const Triangle &a,const Triangle &b) {
@@ -84,7 +89,14 @@ Vec2 project(Vec3 p,int drop) {
          drop==1?Vec2{p.x,p.z}:Vec2{p.x,p.y};
 }
 double orient(Vec2 a,Vec2 b,Vec2 c) {
-  return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+  // Use extended intermediate precision when supported (Linux/macOS).
+  // Windows long double may be identical to double: this is not a substitute
+  // for exact orientation predicates in pathological meshes.
+  const long double abx=static_cast<long double>(b.x)-a.x;
+  const long double aby=static_cast<long double>(b.y)-a.y;
+  const long double acx=static_cast<long double>(c.x)-a.x;
+  const long double acy=static_cast<long double>(c.y)-a.y;
+  return static_cast<double>(abx*acy-aby*acx);
 }
 double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
   int drop=0;
@@ -93,7 +105,12 @@ double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
   const Vec2 ba[3]={project(b.v[0],drop),project(b.v[1],drop),project(b.v[2],drop)};
   const double winding=orient(ba[0],ba[1],ba[2])>=0.0?1.0:-1.0;
   std::vector<Vec2> poly={project(a.v[0],drop),project(a.v[1],drop),project(a.v[2],drop)};
-  const double eps=1e-12;
+  const Vec2 aa[3]={project(a.v[0],drop),project(a.v[1],drop),project(a.v[2],drop)};
+  const double area_a=0.5*std::abs(orient(aa[0],aa[1],aa[2]));
+  const double area_b=0.5*std::abs(orient(ba[0],ba[1],ba[2]));
+  // Area predicates must scale with *local triangle area*, not the whole
+  // sculpt bounding box. A fixed 1e-12 tolerance erased 2e-7 sized quads.
+  const double eps=std::max(1e-28,1e-12*std::min(area_a,area_b));
   for(int edge=0;edge<3;++edge) {
     const Vec2 p=ba[edge],q=ba[(edge+1)%3];
     std::vector<Vec2> clipped;
@@ -140,11 +157,59 @@ double feature_distance(Vec3 p,const SharedFeature &shared,
   }
   return 0.0;
 }
+// If the AABB intersection is contained wholly inside the exact shared
+// vertex or shared edge, every possible geometric intersection must be a
+// legal contact. This is conservative and only skips narrowphase when it can
+// be proven unnecessary from bounds alone; warped/folded neighbors still go
+// through the full triangle tests.
+bool bounds_touch_only_shared_feature(
+    const Aabb &a,const Aabb &b,const SharedFeature &shared,
+    const std::vector<Vec3> &positions) {
+  if(shared.count==0||shared.count>2)return false;
+  const Vec3 lo{std::max(a.lo.x,b.lo.x),std::max(a.lo.y,b.lo.y),
+                std::max(a.lo.z,b.lo.z)};
+  const Vec3 hi{std::min(a.hi.x,b.hi.x),std::min(a.hi.y,b.hi.y),
+                std::min(a.hi.z,b.hi.z)};
+  // A small gap can be admitted by the broadphase tolerance; preserve the
+  // full narrowphase for those cases to avoid numerical false negatives.
+  if(lo.x>hi.x||lo.y>hi.y||lo.z>hi.z)return false;
+  constexpr double tol=2e-15; // normalized unit extent, below SAT separation tolerance
+  if(shared.count==1) {
+    const Vec3 p=positions[shared.indices[0]];
+    return std::abs(lo.x-p.x)<=tol&&std::abs(hi.x-p.x)<=tol&&
+           std::abs(lo.y-p.y)<=tol&&std::abs(hi.y-p.y)<=tol&&
+           std::abs(lo.z-p.z)<=tol&&std::abs(hi.z-p.z)<=tol;
+  }
+  // Fast exact-box test for an axis-aligned shared edge. Its AABB IS the
+  // shared segment; the intersection AABB must fit entirely within it.
+  // A tilted shared edge needs the more expensive 8-corner feature test.
+  const Vec3 e0=positions[shared.indices[0]];
+  const Vec3 e1=positions[shared.indices[1]];
+  const Vec3 edge=sub(e1,e0);
+  const int varying=(std::abs(edge.x)>tol)+(std::abs(edge.y)>tol)+
+                    (std::abs(edge.z)>tol);
+  if(varying<=1) {
+    const Vec3 el{std::min(e0.x,e1.x),std::min(e0.y,e1.y),
+                  std::min(e0.z,e1.z)};
+    const Vec3 eh{std::max(e0.x,e1.x),std::max(e0.y,e1.y),
+                  std::max(e0.z,e1.z)};
+    return lo.x>=el.x-tol&&hi.x<=eh.x+tol &&
+           lo.y>=el.y-tol&&hi.y<=eh.y+tol &&
+           lo.z>=el.z-tol&&hi.z<=eh.z+tol;
+  }
+  for(int mask=0;mask<8;++mask) {
+    const Vec3 p{mask&1?hi.x:lo.x,mask&2?hi.y:lo.y,
+                 mask&4?hi.z:lo.z};
+    if(feature_distance(p,shared,positions)>tol)return false;
+  }
+  return true;
+}
+
 bool point_in_triangle(Vec3 p,const Triangle &t,Vec3 n){
   for(int i=0;i<3;++i) {
     const Vec3 edge=sub(t.v[(i+1)%3],t.v[i]);
     const Vec3 ap=sub(p,t.v[i]);
-    if(dot(cross(edge,ap),n)<-1e-12)return false;
+    if(dot(cross(edge,ap),n)<-1e-14)return false;
   }
   return true;
 }
@@ -167,7 +232,7 @@ bool edge_crosses_triangle_away(const Triangle &a,const Triangle &b,
     const double u=std::clamp(t,0.0,1.0);
     const Vec3 hit{p.x+u*(q.x-p.x),p.y+u*(q.y-p.y),p.z+u*(q.z-p.z)};
     if(point_in_triangle(hit,b,n) &&
-       feature_distance(hit,shared,positions)>1e-9)return true;
+       feature_distance(hit,shared,positions)>1e-12)return true;
   }
   return false;
 }
@@ -188,7 +253,18 @@ bool illegal_adjacent_intersection(const Triangle &a,const Triangle &b,
   bool coplanar=parallel>1.0-1e-10;
   for(Vec3 p:b.v)if(std::abs(dot(sub(p,a.v[0]),unit))>1e-10)
     coplanar=false;
-  if(coplanar)return coplanar_overlap_area(a,b,n1)>1e-13;
+  if(coplanar) {
+    int drop=0;
+    if(std::abs(n1.y)>std::abs(n1.x))drop=1;
+    if(std::abs(n1.z)>std::abs(axis(n1,drop)))drop=2;
+    const auto area=[&](const Triangle &t){
+      return 0.5*std::abs(orient(project(t.v[0],drop),
+                                 project(t.v[1],drop),
+                                 project(t.v[2],drop)));
+    };
+    const double threshold=std::max(1e-28,1e-12*std::min(area(a),area(b)));
+    return coplanar_overlap_area(a,b,n1)>threshold;
+  }
   return edge_crosses_triangle_away(a,b,shared,positions)||
          edge_crosses_triangle_away(b,a,shared,positions);
 }
@@ -202,6 +278,10 @@ class QuadBvh {
   const QuadPatchMesh &mesh_;
   std::vector<Vec3> positions_;
   std::vector<Aabb> boxes_;
+  // Scratch buffers retained across candidate checks. A rejected geometric
+  // update cannot corrupt the last valid BVH.
+  std::vector<Vec3> staged_positions_;
+  std::vector<Aabb> staged_boxes_;
   std::vector<Vec3> centers_;
   std::vector<Id> indices_;
   std::vector<Node> nodes_;
@@ -243,7 +323,15 @@ class QuadBvh {
     const auto &qa=mesh_.quads[a],&qb=mesh_.quads[b];
     if(!boxes_[a].overlaps(boxes_[b]))return true;
     const SharedFeature shared=shared_vertices(qa,qb);
-    if(shared.count)++report_.adjacent_pairs_checked;
+    if(shared.count) {
+      ++report_.adjacent_pairs_checked;
+      if(bounds_touch_only_shared_feature(boxes_[a],boxes_[b],
+                                          shared,positions_)) {
+        ++report_.adjacent_pairs_ignored;
+        ++report_.shared_feature_fastpath_skips;
+        return true;
+      }
+    }
     ++report_.candidate_quad_pairs;
     for(int ia=0;ia<2;++ia){
       const Triangle ta=tri(a,ia);
@@ -338,17 +426,105 @@ class QuadBvh {
     nodes_.reserve(mesh.quads.size()/4+16);
     build(0,static_cast<Id>(mesh.quads.size()));
   }
-  QuadIntersectionReport query() {
+  void refit(const std::vector<Vec3> &vertices) {
+    if(vertices.size()!=positions_.size()) {
+      throw std::invalid_argument("BVH refit cannot change the vertex count");
+    }
+    Vec3 lo=vertices.front(),hi=lo;
+    for(const Vec3 p:vertices) {
+      if(!finite(p))throw std::invalid_argument("BVH refit contains nonfinite vertices");
+      lo.x=std::min(lo.x,p.x);lo.y=std::min(lo.y,p.y);lo.z=std::min(lo.z,p.z);
+      hi.x=std::max(hi.x,p.x);hi.y=std::max(hi.y,p.y);hi.z=std::max(hi.z,p.z);
+    }
+    const double scale=std::max({hi.x-lo.x,hi.y-lo.y,hi.z-lo.z});
+    if(!(scale>0)||!std::isfinite(scale))
+      throw std::invalid_argument("BVH refit has invalid geometric scale");
+    staged_positions_.resize(vertices.size());
+    for(std::size_t k=0;k<vertices.size();++k) {
+      const Vec3 p=vertices[k];
+      staged_positions_[k]={(p.x-lo.x)/scale,(p.y-lo.y)/scale,(p.z-lo.z)/scale};
+    }
+    staged_boxes_.resize(mesh_.quads.size());
+    for(Id i=0;i<mesh_.quads.size();++i) {
+      const auto &q=mesh_.quads[i];
+      const Vec3 a=staged_positions_[q[0]],b=staged_positions_[q[1]];
+      const Vec3 c=staged_positions_[q[2]],d=staged_positions_[q[3]];
+      const Vec3 n1=cross(sub(b,a),sub(c,a));
+      const Vec3 n2=cross(sub(c,a),sub(d,a));
+      if(!(std::hypot(n1.x,n1.y,n1.z)>1e-14 &&
+           std::hypot(n2.x,n2.y,n2.z)>1e-14) || dot(n1,n2)<=0.0) {
+        throw std::invalid_argument("BVH refit would create a degenerate or folded quad");
+      }
+      Aabb bounds;
+      bounds.extend(a);bounds.extend(b);bounds.extend(c);bounds.extend(d);
+      staged_boxes_[i]=bounds;
+    }
+    // All validation completed: commit the new geometry, keeping the former
+    // vector capacities available for the next trial. Topology and node order
+    // remain immutable; only the stored geometry and BVH node boxes change.
+    positions_.swap(staged_positions_);
+    boxes_.swap(staged_boxes_);
+    // Nodes are allocated parent-first, so reverse order is bottom-up.
+    for(std::size_t idx=nodes_.size();idx>0;) {
+      Node &node=nodes_[--idx];
+      Aabb bounds;
+      if(node.leaf) {
+        for(Id j=node.first;j<node.first+node.count;++j)
+          bounds.extend(boxes_[indices_[j]]);
+      } else {
+        bounds.extend(nodes_[node.left].box);
+        bounds.extend(nodes_[node.right].box);
+      }
+      node.box=bounds;
+    }
+  }
+  QuadIntersectionReport query(std::size_t max_reported_pairs=16) {
+    if(max_reported_pairs==0)
+      throw std::invalid_argument("BVH collision report limit must be positive");
+    limit_=max_reported_pairs;
+    report_=QuadIntersectionReport{};
     traverse(0,0);
     return std::move(report_);
   }
+
 };
 } // namespace
+
+struct PreparedQuadCollisionChecker::Impl {
+  QuadPatchMesh mesh;
+  QuadBvh bvh;
+  std::uint64_t refits=0;
+  explicit Impl(const QuadPatchMesh &input)
+      : mesh(input), bvh(mesh,16) {}
+};
+PreparedQuadCollisionChecker::PreparedQuadCollisionChecker(const QuadPatchMesh &patch)
+    : impl_(new Impl(patch)) {}
+PreparedQuadCollisionChecker::~PreparedQuadCollisionChecker()=default;
+PreparedQuadCollisionChecker::PreparedQuadCollisionChecker(
+    PreparedQuadCollisionChecker &&) noexcept=default;
+PreparedQuadCollisionChecker &PreparedQuadCollisionChecker::operator=(
+    PreparedQuadCollisionChecker &&) noexcept=default;
+QuadIntersectionReport PreparedQuadCollisionChecker::check_initial(std::size_t limit) {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->bvh.query(limit);
+}
+QuadIntersectionReport PreparedQuadCollisionChecker::check_positions(
+    const std::vector<Vec3> &positions,std::size_t limit) {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  if(limit==0)throw std::invalid_argument("collision report limit must be positive");
+  impl_->bvh.refit(positions);
+  ++impl_->refits;
+  return impl_->bvh.query(limit);
+}
+std::uint64_t PreparedQuadCollisionChecker::refit_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->refits;
+}
 
 QuadIntersectionReport find_quad_self_intersections(
     const QuadPatchMesh &mesh,std::size_t max_reported_pairs) {
   QuadBvh bvh(mesh,max_reported_pairs);
-  return bvh.query();
+  return bvh.query(max_reported_pairs);
 }
 
 } // namespace guidedquad

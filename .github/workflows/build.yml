@@ -30,6 +30,9 @@ jobs:
       - name: BVH reprojection query diagnostics (reference case)
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         run: ctest --test-dir build -C Release -V -R "^guidedquad_projection$"
+      - name: Persistent collision BVH speed comparison
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: ctest --test-dir build -C Release -V -R "^guidedquad_refit$"
 
   sanitizer-check:
     name: ASan + UBSan (Linux)

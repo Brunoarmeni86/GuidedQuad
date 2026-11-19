@@ -70,6 +70,25 @@ int main(){
     assert(found.pairs.empty()); // nonoverlapping AABBs
   }
   {
+    // Precision regression: old 1e-13 SAT margin reported distinct sheets
+    // separated by ~1e-14 as colliding even though the input double values
+    // can represent that distance in this normalized coordinate system.
+    auto layers=two_quads(true);
+    for(std::size_t i=4;i<8;++i)layers.vertices[i].z=1e-14;
+    assert(find_quad_self_intersections(layers).pairs.empty());
+    for(std::size_t i=4;i<8;++i)layers.vertices[i].z=0.0;
+    assert(find_quad_self_intersections(layers).pairs.size()==1);
+
+    // Also distinguish separate nearly touching boundaries in-plane.
+    auto separated=two_quads(true,true);
+    for(std::size_t i=4;i<8;++i)
+      separated.vertices[i].x-=1.0-1e-13;
+    assert(find_quad_self_intersections(separated).pairs.empty());
+    for(std::size_t i=4;i<8;++i)
+      separated.vertices[i].x-=2e-9;
+    assert(find_quad_self_intersections(separated).pairs.size()==1);
+  }
+  {
     // The predicates normalize the entire model to unit bounding scale.
     // Both very small and very large but representable coordinates must
     // give the same crossing and disjoint classifications.
@@ -89,6 +108,7 @@ int main(){
     const auto found=find_quad_self_intersections(grid);
     assert(found.pairs.empty());
     assert(found.adjacent_pairs_ignored>0);
+    assert(found.shared_feature_fastpath_skips>0);
     // Candidate count is far below an exhaustive O(Q^2) scan.
     const std::uint64_t all_pairs=grid.quads.size()*(grid.quads.size()-1)/2;
     assert(found.candidate_quad_pairs<all_pairs/10);
