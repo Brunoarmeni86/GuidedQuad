@@ -100,6 +100,23 @@ int main() {
     assert(report.adjacent_pairs_checked>0);
   }
   {
+    // Local quad features can be many orders smaller than the entire sculpt.
+    // The old 1e-13 *global* coplanar area cutoff silently ignored this
+    // illegal adjacent overlap (area ~1e-14 in a unit-size model).
+    constexpr double w=2e-7;
+    QuadPatchMesh tiny;
+    tiny.vertices={{0,0,0},{w,0,0},{w,w,0},{0,w,0},
+                   {w*0.25,0,0},{w*0.25,w,0},
+                   {1,1,0}}; // establishes global unit bounding scale
+    tiny.quads={{0,1,2,3},{1,4,5,2}};
+    const auto overlapping=find_quad_self_intersections(tiny);
+    assert(overlapping.pairs.size()==1);
+    tiny.vertices[4].x=w*1.75;
+    tiny.vertices[5].x=w*1.75;
+    const auto legal=find_quad_self_intersections(tiny);
+    assert(legal.pairs.empty());
+  }
+  {
     // Invalid seam mapping must be rejected rather than silently welding
     // physically separated coordinates.
     bool rejected=false;
