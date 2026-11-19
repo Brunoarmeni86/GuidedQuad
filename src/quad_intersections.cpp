@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <numeric>
 #include <stdexcept>
 #include <vector>
@@ -202,6 +204,10 @@ class QuadBvh {
   const QuadPatchMesh &mesh_;
   std::vector<Vec3> positions_;
   std::vector<Aabb> boxes_;
+  // Scratch buffers retained across candidate checks. A rejected geometric
+  // update cannot corrupt the last valid BVH.
+  std::vector<Vec3> staged_positions_;
+  std::vector<Aabb> staged_boxes_;
   std::vector<Vec3> centers_;
   std::vector<Id> indices_;
   std::vector<Node> nodes_;
@@ -338,17 +344,105 @@ class QuadBvh {
     nodes_.reserve(mesh.quads.size()/4+16);
     build(0,static_cast<Id>(mesh.quads.size()));
   }
-  QuadIntersectionReport query() {
+  void refit(const std::vector<Vec3> &vertices) {
+    if(vertices.size()!=positions_.size()) {
+      throw std::invalid_argument("BVH refit cannot change the vertex count");
+    }
+    Vec3 lo=vertices.front(),hi=lo;
+    for(const Vec3 p:vertices) {
+      if(!finite(p))throw std::invalid_argument("BVH refit contains nonfinite vertices");
+      lo.x=std::min(lo.x,p.x);lo.y=std::min(lo.y,p.y);lo.z=std::min(lo.z,p.z);
+      hi.x=std::max(hi.x,p.x);hi.y=std::max(hi.y,p.y);hi.z=std::max(hi.z,p.z);
+    }
+    const double scale=std::max({hi.x-lo.x,hi.y-lo.y,hi.z-lo.z});
+    if(!(scale>0)||!std::isfinite(scale))
+      throw std::invalid_argument("BVH refit has invalid geometric scale");
+    staged_positions_.resize(vertices.size());
+    for(std::size_t k=0;k<vertices.size();++k) {
+      const Vec3 p=vertices[k];
+      staged_positions_[k]={(p.x-lo.x)/scale,(p.y-lo.y)/scale,(p.z-lo.z)/scale};
+    }
+    staged_boxes_.resize(mesh_.quads.size());
+    for(Id i=0;i<mesh_.quads.size();++i) {
+      const auto &q=mesh_.quads[i];
+      const Vec3 a=staged_positions_[q[0]],b=staged_positions_[q[1]];
+      const Vec3 c=staged_positions_[q[2]],d=staged_positions_[q[3]];
+      const Vec3 n1=cross(sub(b,a),sub(c,a));
+      const Vec3 n2=cross(sub(c,a),sub(d,a));
+      if(!(std::hypot(n1.x,n1.y,n1.z)>1e-14 &&
+           std::hypot(n2.x,n2.y,n2.z)>1e-14) || dot(n1,n2)<=0.0) {
+        throw std::invalid_argument("BVH refit would create a degenerate or folded quad");
+      }
+      Aabb bounds;
+      bounds.extend(a);bounds.extend(b);bounds.extend(c);bounds.extend(d);
+      staged_boxes_[i]=bounds;
+    }
+    // All validation completed: commit the new geometry, keeping the former
+    // vector capacities available for the next trial. Topology and node order
+    // remain immutable; only the stored geometry and BVH node boxes change.
+    positions_.swap(staged_positions_);
+    boxes_.swap(staged_boxes_);
+    // Nodes are allocated parent-first, so reverse order is bottom-up.
+    for(std::size_t idx=nodes_.size();idx>0;) {
+      Node &node=nodes_[--idx];
+      Aabb bounds;
+      if(node.leaf) {
+        for(Id j=node.first;j<node.first+node.count;++j)
+          bounds.extend(boxes_[indices_[j]]);
+      } else {
+        bounds.extend(nodes_[node.left].box);
+        bounds.extend(nodes_[node.right].box);
+      }
+      node.box=bounds;
+    }
+  }
+  QuadIntersectionReport query(std::size_t max_reported_pairs=16) {
+    if(max_reported_pairs==0)
+      throw std::invalid_argument("BVH collision report limit must be positive");
+    limit_=max_reported_pairs;
+    report_=QuadIntersectionReport{};
     traverse(0,0);
     return std::move(report_);
   }
+
 };
 } // namespace
+
+struct PreparedQuadCollisionChecker::Impl {
+  QuadPatchMesh mesh;
+  QuadBvh bvh;
+  std::uint64_t refits=0;
+  explicit Impl(const QuadPatchMesh &input)
+      : mesh(input), bvh(mesh,16) {}
+};
+PreparedQuadCollisionChecker::PreparedQuadCollisionChecker(const QuadPatchMesh &patch)
+    : impl_(new Impl(patch)) {}
+PreparedQuadCollisionChecker::~PreparedQuadCollisionChecker()=default;
+PreparedQuadCollisionChecker::PreparedQuadCollisionChecker(
+    PreparedQuadCollisionChecker &&) noexcept=default;
+PreparedQuadCollisionChecker &PreparedQuadCollisionChecker::operator=(
+    PreparedQuadCollisionChecker &&) noexcept=default;
+QuadIntersectionReport PreparedQuadCollisionChecker::check_initial(std::size_t limit) {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->bvh.query(limit);
+}
+QuadIntersectionReport PreparedQuadCollisionChecker::check_positions(
+    const std::vector<Vec3> &positions,std::size_t limit) {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  if(limit==0)throw std::invalid_argument("collision report limit must be positive");
+  impl_->bvh.refit(positions);
+  ++impl_->refits;
+  return impl_->bvh.query(limit);
+}
+std::uint64_t PreparedQuadCollisionChecker::refit_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->refits;
+}
 
 QuadIntersectionReport find_quad_self_intersections(
     const QuadPatchMesh &mesh,std::size_t max_reported_pairs) {
   QuadBvh bvh(mesh,max_reported_pairs);
-  return bvh.query();
+  return bvh.query(max_reported_pairs);
 }
 
 } // namespace guidedquad
