@@ -291,18 +291,33 @@ class QuadBvh {
   std::vector<Vec3> centers_;
   std::vector<Id> indices_;
   std::vector<Node> nodes_;
+  std::vector<Id> parent_node_, quad_leaf_;
+  std::vector<std::uint32_t> node_epoch_, vertex_epoch_;
+  std::vector<Vec3> local_candidate_positions_;
+  std::vector<Id> affected_nodes_;
+  std::uint32_t update_epoch_ = 0;
+  std::vector<std::uint32_t> dirty_query_epoch_;
+  std::uint32_t query_epoch_ = 0;
+  Vec3 world_origin_{0,0,0};
+  double world_scale_ = 1.0;
+  std::uint64_t local_node_updates_ = 0;
   QuadIntersectionReport report_;
   std::size_t limit_;
 
-  Id build(Id first,Id end){
+  Id build(Id first,Id end,Id parent=std::numeric_limits<Id>::max()){
     const Id self=static_cast<Id>(nodes_.size());
     nodes_.push_back({});
+    parent_node_.push_back(parent);
     Aabb box,centroid;
     for(Id i=first;i<end;++i){
       const Id q=indices_[i];box.extend(boxes_[q]);centroid.extend(centers_[q]);
     }
     nodes_[self].box=box;nodes_[self].first=first;nodes_[self].count=end-first;
-    if(end-first<=8){nodes_[self].leaf=true;return self;}
+    if(end-first<=8){
+      nodes_[self].leaf=true;
+      for(Id k=first;k<end;++k)quad_leaf_[indices_[k]]=self;
+      return self;
+    }
     const Vec3 extent=sub(centroid.hi,centroid.lo);
     int dim=extent.y>extent.x?1:0;
     if(extent.z>axis(extent,dim))dim=2;
@@ -312,7 +327,7 @@ class QuadBvh {
         const double av=axis(centers_[a],dim),bv=axis(centers_[b],dim);
         return av<bv||(av==bv&&a<b);
       });
-    const Id left=build(first,mid),right=build(mid,end);
+    const Id left=build(first,mid,self),right=build(mid,end,self);
     nodes_[self].left=left;nodes_[self].right=right;
     return self;
   }
@@ -400,6 +415,8 @@ class QuadBvh {
     const double scale=std::max({hi.x-lo.x,hi.y-lo.y,hi.z-lo.z});
     if(!(scale>0)||!std::isfinite(scale))
       throw std::invalid_argument("quad mesh bounds are degenerate or unrepresentable");
+    world_origin_=lo;
+    world_scale_=scale;
     positions_.reserve(mesh.vertices.size());
     for(Vec3 p:mesh.vertices){
       // Normalize geometry to a unit-scale box to avoid tiny-scale SAT issues.
@@ -429,8 +446,16 @@ class QuadBvh {
       if(!(len_a>1e-14&&len_b>1e-14)||dot(na,nb)<=0)
         throw std::invalid_argument("quad has degenerate or folded split triangles");
     }
-    nodes_.reserve(mesh.quads.size()/4+16);
+    const std::size_t estimated_nodes=mesh.quads.size()/4+16;
+    nodes_.reserve(estimated_nodes);
+    parent_node_.reserve(estimated_nodes);
+    quad_leaf_.resize(mesh.quads.size());
+    dirty_query_epoch_.assign(mesh.quads.size(),0);
     build(0,static_cast<Id>(mesh.quads.size()));
+    node_epoch_.assign(nodes_.size(),0);
+    vertex_epoch_.assign(positions_.size(),0);
+    local_candidate_positions_.resize(positions_.size());
+    affected_nodes_.reserve(nodes_.size());
   }
   void refit(const std::vector<Vec3> &vertices) {
     if(vertices.size()!=positions_.size()) {
@@ -470,6 +495,8 @@ class QuadBvh {
     // remain immutable; only the stored geometry and BVH node boxes change.
     positions_.swap(staged_positions_);
     boxes_.swap(staged_boxes_);
+    world_origin_=lo;
+    world_scale_=scale;
     // Nodes are allocated parent-first, so reverse order is bottom-up.
     for(std::size_t idx=nodes_.size();idx>0;) {
       Node &node=nodes_[--idx];
@@ -484,10 +511,100 @@ class QuadBvh {
       node.box=bounds;
     }
   }
+  // Return false only when a candidate escapes the fixed normalization
+  // frame; the caller must then use the full refit (which can recenter).
+  // All validation completes BEFORE changing any live vertex or BVH box.
+  bool refit_local(const std::vector<Vec3> &vertices,
+                   const std::vector<Id> &dirty_vertices,
+                   const std::vector<Id> &dirty_faces) {
+    if(vertices.size()!=positions_.size())
+      throw std::invalid_argument("local BVH refit cannot change vertex count");
+    if(dirty_faces.empty())return true;
+    if(update_epoch_==std::numeric_limits<std::uint32_t>::max()) {
+      std::fill(vertex_epoch_.begin(),vertex_epoch_.end(),0);
+      std::fill(node_epoch_.begin(),node_epoch_.end(),0);
+      update_epoch_=0;
+    }
+    ++update_epoch_;
+    for(Id id:dirty_vertices) {
+      if(id>=positions_.size())
+        throw std::invalid_argument("local BVH dirty vertex out of bounds");
+      const Vec3 p=vertices[id];
+      if(!finite(p))
+        throw std::invalid_argument("local BVH dirty vertex is nonfinite");
+      const Vec3 normalized{(p.x-world_origin_.x)/world_scale_,
+                            (p.y-world_origin_.y)/world_scale_,
+                            (p.z-world_origin_.z)/world_scale_};
+      if(!finite(normalized) ||
+         normalized.x < -0.25 || normalized.x > 1.25 ||
+         normalized.y < -0.25 || normalized.y > 1.25 ||
+         normalized.z < -0.25 || normalized.z > 1.25) {
+        // Keep geometric scale reasonably close to unit size. Outside this
+        // interval, recenter the *whole* model before any collision check.
+        return false;
+      }
+      vertex_epoch_[id]=update_epoch_;
+      local_candidate_positions_[id]=normalized;
+    }
+    const auto get=[&](Id id) -> Vec3 {
+      return vertex_epoch_[id]==update_epoch_?
+             local_candidate_positions_[id]:positions_[id];
+    };
+    // Staging is sparse: unchanged faces never recompute their positions,
+    // normals or AABBs.
+    if(staged_boxes_.size()!=boxes_.size())staged_boxes_.resize(boxes_.size());
+    for(Id face:dirty_faces) {
+      if(face>=mesh_.quads.size())
+        throw std::invalid_argument("local BVH dirty face out of bounds");
+      const auto &q=mesh_.quads[face];
+      const Vec3 a=get(q[0]),b=get(q[1]),c=get(q[2]),d=get(q[3]);
+      const Vec3 n1=cross(sub(b,a),sub(c,a));
+      const Vec3 n2=cross(sub(c,a),sub(d,a));
+      if(!(std::hypot(n1.x,n1.y,n1.z)>1e-14 &&
+           std::hypot(n2.x,n2.y,n2.z)>1e-14) ||
+         dot(n1,n2)<=0.0) {
+        throw std::invalid_argument("local BVH refit would create a degenerate or folded quad");
+      }
+      Aabb bounds;
+      bounds.extend(a);bounds.extend(b);bounds.extend(c);bounds.extend(d);
+      staged_boxes_[face]=bounds;
+    }
+    // Commit: preallocate node scratch once; bottom-up tree recomputation
+    // does not allocate or invoke any fallible operations.
+    for(Id id:dirty_vertices)positions_[id]=local_candidate_positions_[id];
+    for(Id face:dirty_faces)boxes_[face]=staged_boxes_[face];
+    affected_nodes_.clear();
+    for(Id face:dirty_faces) {
+      Id node=quad_leaf_[face];
+      while(node!=std::numeric_limits<Id>::max() &&
+            node_epoch_[node]!=update_epoch_) {
+        node_epoch_[node]=update_epoch_;
+        affected_nodes_.push_back(node);
+        node=parent_node_[node];
+      }
+    }
+    std::sort(affected_nodes_.begin(),affected_nodes_.end(),
+              [](Id a,Id b){return a>b;});
+    for(Id id:affected_nodes_) {
+      Node &node=nodes_[id];
+      Aabb bounds;
+      if(node.leaf) {
+        for(Id k=node.first;k<node.first+node.count;++k)
+          bounds.extend(boxes_[indices_[k]]);
+      } else {
+        bounds.extend(nodes_[node.left].box);
+        bounds.extend(nodes_[node.right].box);
+      }
+      node.box=bounds;
+    }
+    local_node_updates_+=affected_nodes_.size();
+    return true;
+  }
+  std::uint64_t local_node_updates() const {return local_node_updates_;}
   // Traverse only AABBs touched by dirty quads. If two dirty quads
   // overlap, the larger-index query skips the already-visited pair.
   bool query_against_node(Id moving,Id node_index,
-                          const std::vector<std::uint8_t> &dirty) {
+                          std::uint32_t stamp) {
     const Node &node=nodes_[node_index];
     ++report_.bvh_pair_tests;
     if(!boxes_[moving].overlaps(node.box))return true;
@@ -495,13 +612,13 @@ class QuadBvh {
       for(Id i=node.first;i<node.first+node.count;++i) {
         const Id other=indices_[i];
         if(other==moving)continue;
-        if(dirty[other] && other<moving)continue;
+        if(dirty_query_epoch_[other]==stamp && other<moving)continue;
         if(!process_pair(moving,other))return false;
       }
       return true;
     }
-    return query_against_node(moving,node.left,dirty) &&
-           query_against_node(moving,node.right,dirty);
+    return query_against_node(moving,node.left,stamp) &&
+           query_against_node(moving,node.right,stamp);
   }
   QuadIntersectionReport query_dirty(const std::vector<Id> &dirty_faces,
                                      std::size_t max_reported_pairs=16) {
@@ -510,14 +627,23 @@ class QuadBvh {
     limit_=max_reported_pairs;
     report_=QuadIntersectionReport{};
     if(dirty_faces.empty())return std::move(report_);
-    std::vector<std::uint8_t> dirty(boxes_.size(),0);
-    for(Id face:dirty_faces) {
-      if(face>=boxes_.size())throw std::invalid_argument("dirty quad index is invalid");
-      dirty[face]=1;
+    if(query_epoch_==std::numeric_limits<std::uint32_t>::max()) {
+      std::fill(dirty_query_epoch_.begin(),dirty_query_epoch_.end(),0);
+      query_epoch_=0;
     }
-    for(Id face=0;face<boxes_.size();++face)if(dirty[face]) {
+    ++query_epoch_;
+    // Sorting just the dirty set is O(D log D) rather than allocating and
+    // scanning a F-element face mask every stroke (D << F for local brushes).
+    std::vector<Id> faces=dirty_faces;
+    std::sort(faces.begin(),faces.end());
+    faces.erase(std::unique(faces.begin(),faces.end()),faces.end());
+    for(Id face:faces) {
+      if(face>=boxes_.size())throw std::invalid_argument("dirty quad index is invalid");
+      dirty_query_epoch_[face]=query_epoch_;
+    }
+    for(Id face:faces) {
       ++report_.dirty_face_queries;
-      if(!query_against_node(face,0,dirty))break;
+      if(!query_against_node(face,0,query_epoch_))break;
     }
     return std::move(report_);
   }
@@ -538,11 +664,15 @@ struct PreparedQuadCollisionChecker::Impl {
   QuadBvh bvh;
   std::vector<Vec3> accepted_positions;
   std::vector<std::vector<Id>> incident_quads;
+  std::vector<std::uint32_t> face_mark_epoch;
+  std::uint32_t face_epoch=0;
   std::uint64_t refits=0,dirty_updates=0;
+  std::uint64_t local_refits=0,full_refit_fallbacks=0;
   bool clean_baseline=false;
   explicit Impl(const QuadPatchMesh &input)
       : mesh(input), bvh(mesh,16), accepted_positions(input.vertices),
         incident_quads(input.vertices.size()) {
+    face_mark_epoch.assign(input.quads.size(),0);
     for(Id face=0;face<input.quads.size();++face)
       for(Id vertex:input.quads[face])
         incident_quads[vertex].push_back(face);
@@ -586,38 +716,62 @@ QuadIntersectionReport PreparedQuadCollisionChecker::check_positions_dirty(
     if(v>=positions.size())throw std::invalid_argument("dirty vertex index invalid");
     declared[v]=1;
   }
-  std::vector<std::uint8_t> faces(impl_->mesh.quads.size(),0);
+  if(impl_->face_epoch==std::numeric_limits<std::uint32_t>::max()) {
+    std::fill(impl_->face_mark_epoch.begin(),impl_->face_mark_epoch.end(),0);
+    impl_->face_epoch=0;
+  }
+  ++impl_->face_epoch;
   std::vector<Id> changed_faces;
+  std::vector<Id> changed_vertices;
+  changed_vertices.reserve(dirty_vertices.size());
   for(std::size_t k=0;k<positions.size();++k) {
     const Vec3 p=positions[k],q=impl_->accepted_positions[k];
     if(!finite(p))throw std::invalid_argument("dirty update has nonfinite vertex");
     const bool changed=(p.x!=q.x || p.y!=q.y || p.z!=q.z);
     if(changed&&!declared[k])
       throw std::invalid_argument("dirty list omits an altered vertex");
-    if(changed)for(Id face:impl_->incident_quads[k]) {
-      if(!faces[face]){faces[face]=1;changed_faces.push_back(face);}
+    if(changed) {
+      changed_vertices.push_back(static_cast<Id>(k));
+      for(Id face:impl_->incident_quads[k]) {
+        if(impl_->face_mark_epoch[face]!=impl_->face_epoch) {
+          impl_->face_mark_epoch[face]=impl_->face_epoch;
+          changed_faces.push_back(face);
+        }
+      }
     }
   }
-  if(changed_faces.empty())return QuadIntersectionReport{};
+  if(changed_faces.empty()) {
+    // Orphan vertices have no incident quad and cannot introduce a surface
+    // collision; keep the accepted input snapshot synchronized regardless.
+    impl_->accepted_positions=positions;
+    return QuadIntersectionReport{};
+  }
   // A clean prior state proves that a newly introduced intersection must
-  // involve at least one changed face. Every changed face is queried against
-  // the full up-to-date tree, including unchanged neighboring geometry.
-  impl_->bvh.refit(positions);
-  ++impl_->refits;
+  // involve at least one changed face. The original normalization frame is
+  // held fixed for local refits. Large motion falls back to a full recenter.
+  const auto update_tree=[&](const std::vector<Vec3> &target) {
+    if(impl_->bvh.refit_local(target,changed_vertices,changed_faces)) {
+      ++impl_->local_refits;
+    } else {
+      impl_->bvh.refit(target);
+      ++impl_->full_refit_fallbacks;
+    }
+    ++impl_->refits;
+  };
+  update_tree(positions);
   ++impl_->dirty_updates;
   try {
     auto report=impl_->bvh.query_dirty(changed_faces,limit);
     if(report.pairs.empty()) {
       impl_->accepted_positions=positions;
     } else {
-      // Leave a dirty attempt's failure non-destructive for backtracking.
-      impl_->bvh.refit(impl_->accepted_positions);
-      ++impl_->refits;
+      // Failed candidate: refit back to the last verified clean positions
+      // before another backtracking attempt, without changing topology.
+      update_tree(impl_->accepted_positions);
     }
     return report;
   } catch(...) {
-    impl_->bvh.refit(impl_->accepted_positions);
-    ++impl_->refits;
+    update_tree(impl_->accepted_positions);
     throw;
   }
 }
@@ -628,6 +782,18 @@ std::uint64_t PreparedQuadCollisionChecker::refit_count() const {
 std::uint64_t PreparedQuadCollisionChecker::dirty_update_count() const {
   if(!impl_)throw std::logic_error("collision checker was moved from");
   return impl_->dirty_updates;
+}
+std::uint64_t PreparedQuadCollisionChecker::local_refit_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->local_refits;
+}
+std::uint64_t PreparedQuadCollisionChecker::full_refit_fallback_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->full_refit_fallbacks;
+}
+std::uint64_t PreparedQuadCollisionChecker::local_bvh_node_updates() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->bvh.local_node_updates();
 }
 
 QuadIntersectionReport find_quad_self_intersections(
