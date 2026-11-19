@@ -180,6 +180,23 @@ bool bounds_touch_only_shared_feature(
            std::abs(lo.y-p.y)<=tol&&std::abs(hi.y-p.y)<=tol&&
            std::abs(lo.z-p.z)<=tol&&std::abs(hi.z-p.z)<=tol;
   }
+  // Fast exact-box test for an axis-aligned shared edge. Its AABB IS the
+  // shared segment; the intersection AABB must fit entirely within it.
+  // A tilted shared edge needs the more expensive 8-corner feature test.
+  const Vec3 e0=positions[shared.indices[0]];
+  const Vec3 e1=positions[shared.indices[1]];
+  const Vec3 edge=sub(e1,e0);
+  const int varying=(std::abs(edge.x)>tol)+(std::abs(edge.y)>tol)+
+                    (std::abs(edge.z)>tol);
+  if(varying<=1) {
+    const Vec3 el{std::min(e0.x,e1.x),std::min(e0.y,e1.y),
+                  std::min(e0.z,e1.z)};
+    const Vec3 eh{std::max(e0.x,e1.x),std::max(e0.y,e1.y),
+                  std::max(e0.z,e1.z)};
+    return lo.x>=el.x-tol&&hi.x<=eh.x+tol &&
+           lo.y>=el.y-tol&&hi.y<=eh.y+tol &&
+           lo.z>=el.z-tol&&hi.z<=eh.z+tol;
+  }
   for(int mask=0;mask<8;++mask) {
     const Vec3 p{mask&1?hi.x:lo.x,mask&2?hi.y:lo.y,
                  mask&4?hi.z:lo.z};
