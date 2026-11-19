@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace guidedquad {
@@ -22,6 +23,30 @@ struct QuadIntersectionReport {
   std::uint64_t adjacent_pairs_ignored = 0;
   std::uint64_t adjacent_pairs_checked = 0;
   bool truncated = false;
+};
+
+// Persistent BVH for repeated validation of the SAME quad topology.
+// The build is performed once. Subsequent coordinate updates refit AABBs in
+// linear time without re-sorting or rebuilding the tree. Not thread-safe.
+// A failed update throws and leaves the last valid geometry unchanged.
+class PreparedQuadCollisionChecker {
+ public:
+  explicit PreparedQuadCollisionChecker(const QuadPatchMesh &topology_and_positions);
+  ~PreparedQuadCollisionChecker();
+  PreparedQuadCollisionChecker(PreparedQuadCollisionChecker &&) noexcept;
+  PreparedQuadCollisionChecker &operator=(PreparedQuadCollisionChecker &&) noexcept;
+  PreparedQuadCollisionChecker(const PreparedQuadCollisionChecker &) = delete;
+  PreparedQuadCollisionChecker &operator=(const PreparedQuadCollisionChecker &) = delete;
+
+  QuadIntersectionReport check_initial(std::size_t max_reported_pairs=16);
+  QuadIntersectionReport check_positions(
+      const std::vector<Vec3> &positions,
+      std::size_t max_reported_pairs=16);
+  std::uint64_t refit_count() const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 // Inspect nonadjacent quad pairs using a quad-AABB BVH and triangle-triangle
