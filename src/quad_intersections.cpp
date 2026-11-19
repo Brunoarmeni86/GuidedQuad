@@ -478,6 +478,43 @@ class QuadBvh {
       node.box=bounds;
     }
   }
+  // Traverse only AABBs touched by dirty quads. If two dirty quads
+  // overlap, the larger-index query skips the already-visited pair.
+  bool query_against_node(Id moving,Id node_index,
+                          const std::vector<std::uint8_t> &dirty) {
+    const Node &node=nodes_[node_index];
+    ++report_.bvh_pair_tests;
+    if(!boxes_[moving].overlaps(node.box))return true;
+    if(node.leaf) {
+      for(Id i=node.first;i<node.first+node.count;++i) {
+        const Id other=indices_[i];
+        if(other==moving)continue;
+        if(dirty[other] && other<moving)continue;
+        if(!process_pair(moving,other))return false;
+      }
+      return true;
+    }
+    return query_against_node(moving,node.left,dirty) &&
+           query_against_node(moving,node.right,dirty);
+  }
+  QuadIntersectionReport query_dirty(const std::vector<Id> &dirty_faces,
+                                     std::size_t max_reported_pairs=16) {
+    if(max_reported_pairs==0)
+      throw std::invalid_argument("BVH collision report limit must be positive");
+    limit_=max_reported_pairs;
+    report_=QuadIntersectionReport{};
+    if(dirty_faces.empty())return std::move(report_);
+    std::vector<std::uint8_t> dirty(boxes_.size(),0);
+    for(Id face:dirty_faces) {
+      if(face>=boxes_.size())throw std::invalid_argument("dirty quad index is invalid");
+      dirty[face]=1;
+    }
+    for(Id face=0;face<boxes_.size();++face)if(dirty[face]) {
+      ++report_.dirty_face_queries;
+      if(!query_against_node(face,0,dirty))break;
+    }
+    return std::move(report_);
+  }
   QuadIntersectionReport query(std::size_t max_reported_pairs=16) {
     if(max_reported_pairs==0)
       throw std::invalid_argument("BVH collision report limit must be positive");
@@ -493,9 +530,17 @@ class QuadBvh {
 struct PreparedQuadCollisionChecker::Impl {
   QuadPatchMesh mesh;
   QuadBvh bvh;
-  std::uint64_t refits=0;
+  std::vector<Vec3> accepted_positions;
+  std::vector<std::vector<Id>> incident_quads;
+  std::uint64_t refits=0,dirty_updates=0;
+  bool clean_baseline=false;
   explicit Impl(const QuadPatchMesh &input)
-      : mesh(input), bvh(mesh,16) {}
+      : mesh(input), bvh(mesh,16), accepted_positions(input.vertices),
+        incident_quads(input.vertices.size()) {
+    for(Id face=0;face<input.quads.size();++face)
+      for(Id vertex:input.quads[face])
+        incident_quads[vertex].push_back(face);
+  }
 };
 PreparedQuadCollisionChecker::PreparedQuadCollisionChecker(const QuadPatchMesh &patch)
     : impl_(new Impl(patch)) {}
@@ -506,7 +551,9 @@ PreparedQuadCollisionChecker &PreparedQuadCollisionChecker::operator=(
     PreparedQuadCollisionChecker &&) noexcept=default;
 QuadIntersectionReport PreparedQuadCollisionChecker::check_initial(std::size_t limit) {
   if(!impl_)throw std::logic_error("collision checker was moved from");
-  return impl_->bvh.query(limit);
+  auto report=impl_->bvh.query(limit);
+  impl_->clean_baseline=report.pairs.empty();
+  return report;
 }
 QuadIntersectionReport PreparedQuadCollisionChecker::check_positions(
     const std::vector<Vec3> &positions,std::size_t limit) {
@@ -514,11 +561,67 @@ QuadIntersectionReport PreparedQuadCollisionChecker::check_positions(
   if(limit==0)throw std::invalid_argument("collision report limit must be positive");
   impl_->bvh.refit(positions);
   ++impl_->refits;
-  return impl_->bvh.query(limit);
+  impl_->accepted_positions=positions;
+  auto report=impl_->bvh.query(limit);
+  impl_->clean_baseline=report.pairs.empty();
+  return report;
+}
+QuadIntersectionReport PreparedQuadCollisionChecker::check_positions_dirty(
+    const std::vector<Vec3> &positions,
+    const std::vector<Id> &dirty_vertices,std::size_t limit) {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  if(limit==0)throw std::invalid_argument("collision report limit must be positive");
+  if(!impl_->clean_baseline)
+    throw std::logic_error("dirty check needs a verified collision-free baseline");
+  if(positions.size()!=impl_->accepted_positions.size())
+    throw std::invalid_argument("dirty update cannot change vertex count");
+  std::vector<std::uint8_t> declared(positions.size(),0);
+  for(Id v:dirty_vertices) {
+    if(v>=positions.size())throw std::invalid_argument("dirty vertex index invalid");
+    declared[v]=1;
+  }
+  std::vector<std::uint8_t> faces(impl_->mesh.quads.size(),0);
+  std::vector<Id> changed_faces;
+  for(std::size_t k=0;k<positions.size();++k) {
+    const Vec3 p=positions[k],q=impl_->accepted_positions[k];
+    if(!finite(p))throw std::invalid_argument("dirty update has nonfinite vertex");
+    const bool changed=(p.x!=q.x || p.y!=q.y || p.z!=q.z);
+    if(changed&&!declared[k])
+      throw std::invalid_argument("dirty list omits an altered vertex");
+    if(changed)for(Id face:impl_->incident_quads[k]) {
+      if(!faces[face]){faces[face]=1;changed_faces.push_back(face);}
+    }
+  }
+  if(changed_faces.empty())return QuadIntersectionReport{};
+  // A clean prior state proves that a newly introduced intersection must
+  // involve at least one changed face. Every changed face is queried against
+  // the full up-to-date tree, including unchanged neighboring geometry.
+  impl_->bvh.refit(positions);
+  ++impl_->refits;
+  ++impl_->dirty_updates;
+  try {
+    auto report=impl_->bvh.query_dirty(changed_faces,limit);
+    if(report.pairs.empty()) {
+      impl_->accepted_positions=positions;
+    } else {
+      // Leave a dirty attempt's failure non-destructive for backtracking.
+      impl_->bvh.refit(impl_->accepted_positions);
+      ++impl_->refits;
+    }
+    return report;
+  } catch(...) {
+    impl_->bvh.refit(impl_->accepted_positions);
+    ++impl_->refits;
+    throw;
+  }
 }
 std::uint64_t PreparedQuadCollisionChecker::refit_count() const {
   if(!impl_)throw std::logic_error("collision checker was moved from");
   return impl_->refits;
+}
+std::uint64_t PreparedQuadCollisionChecker::dirty_update_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->dirty_updates;
 }
 
 QuadIntersectionReport find_quad_self_intersections(
