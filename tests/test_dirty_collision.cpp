@@ -69,6 +69,46 @@ int main() {
     assert(same.pairs.empty());
     assert(same.dirty_face_queries==0);
     assert(prepared.dirty_update_count()==2);
+    // Both the failed collision and successful edit reused the local tree;
+    // the rejected edit must restore the cached clean BVH.
+    assert(prepared.local_refit_count()>=3);
+    assert(prepared.full_refit_fallback_count()==0);
+  }
+  {
+    // Changing an extreme vertex may invalidate the frozen coordinate
+    // normalization: the checker must automatically recenter globally.
+    auto patch=separate_quads();
+    PreparedQuadCollisionChecker checker(patch);
+    assert(checker.check_initial(1).pairs.empty());
+    auto far=patch.vertices;
+    for(std::size_t k=4;k<8;++k)far[k].x+=1.3;
+    assert(checker.check_positions_dirty(far,{4,5,6,7},1).pairs.empty());
+    assert(checker.full_refit_fallback_count()==1);
+    assert(checker.local_refit_count()==0);
+    patch.vertices=far;
+    assert(sorted_pairs(checker.check_initial(1))==
+           sorted_pairs(find_quad_self_intersections(patch,1)));
+    // Now a small update within the newly recentered world frame is local.
+    auto near=far;
+    for(std::size_t k=4;k<8;++k)near[k].x-=0.05;
+    assert(checker.check_positions_dirty(near,{4,5,6,7},1).pairs.empty());
+    assert(checker.local_refit_count()==1);
+    patch.vertices=near;
+    assert(sorted_pairs(checker.check_initial(1))==
+           sorted_pairs(find_quad_self_intersections(patch,1)));
+  }
+  {
+    // An unused vertex has no collision-relevant faces. Its position must
+    // nevertheless become the accepted baseline for future dirty checks.
+    auto patch=separate_quads();
+    patch.vertices.push_back({50,0,0});
+    PreparedQuadCollisionChecker checker(patch);
+    assert(checker.check_initial().pairs.empty());
+    auto changed=patch.vertices;
+    changed.back().x=52;
+    assert(checker.check_positions_dirty(changed,{8}).pairs.empty());
+    assert(checker.dirty_update_count()==0);
+    assert(checker.check_positions_dirty(changed,{}).pairs.empty());
   }
   {
     // A globally invalid initial mesh cannot be incrementally validated,
@@ -100,6 +140,9 @@ int main() {
       assert(dirty.bvh_pair_tests < full.bvh_pair_tests);
     }
     assert(prepared.dirty_update_count()==12);
+    assert(prepared.full_refit_fallback_count()==0);
+    assert(prepared.local_refit_count()==12);
+    assert(prepared.local_bvh_node_updates() < 12*200);
   }
   {
     // Same exact frames: whole-tree query versus dirty-only query. The refit
@@ -141,11 +184,16 @@ int main() {
     const double dirty_ms=std::chrono::duration<double,std::milli>(t2-t1).count();
     assert(dirty_node_tests<full_node_tests);
     assert(dirty_faces==frames.size()*4);
+    assert(partial.local_refit_count()==frames.size());
+    assert(partial.full_refit_fallback_count()==0);
+    assert(partial.local_bvh_node_updates()<frames.size()*200);
     std::cout<<"Dirty collision benchmark (48x48 quads, 24 sparse frames): "
              <<full_ms<<" ms full vs "<<dirty_ms<<" ms dirty; SAT triangle pairs "
              <<full_triangle_tests<<" full vs "<<dirty_triangle_tests
              <<" dirty; BVH node tests "<<full_node_tests<<" full vs "
-             <<dirty_node_tests<<" dirty; dirty quad queries "<<dirty_faces<<'\n';
+             <<dirty_node_tests<<" dirty; dirty quad queries "<<dirty_faces
+             <<"; local BVH nodes refitted "<<partial.local_bvh_node_updates()
+             <<" (vs "<<frames.size()<<" complete refits)\n";
   }
   std::cout<<"Dirty collision BVH tests passed.\n";
 }
