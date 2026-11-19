@@ -296,6 +296,8 @@ class QuadBvh {
   std::vector<Vec3> local_candidate_positions_;
   std::vector<Id> affected_nodes_;
   std::uint32_t update_epoch_ = 0;
+  std::vector<std::uint32_t> dirty_query_epoch_;
+  std::uint32_t query_epoch_ = 0;
   Vec3 world_origin_{0,0,0};
   double world_scale_ = 1.0;
   std::uint64_t local_node_updates_ = 0;
@@ -448,6 +450,7 @@ class QuadBvh {
     nodes_.reserve(estimated_nodes);
     parent_node_.reserve(estimated_nodes);
     quad_leaf_.resize(mesh.quads.size());
+    dirty_query_epoch_.assign(mesh.quads.size(),0);
     build(0,static_cast<Id>(mesh.quads.size()));
     node_epoch_.assign(nodes_.size(),0);
     vertex_epoch_.assign(positions_.size(),0);
@@ -601,7 +604,7 @@ class QuadBvh {
   // Traverse only AABBs touched by dirty quads. If two dirty quads
   // overlap, the larger-index query skips the already-visited pair.
   bool query_against_node(Id moving,Id node_index,
-                          const std::vector<std::uint8_t> &dirty) {
+                          std::uint32_t stamp) {
     const Node &node=nodes_[node_index];
     ++report_.bvh_pair_tests;
     if(!boxes_[moving].overlaps(node.box))return true;
@@ -609,13 +612,13 @@ class QuadBvh {
       for(Id i=node.first;i<node.first+node.count;++i) {
         const Id other=indices_[i];
         if(other==moving)continue;
-        if(dirty[other] && other<moving)continue;
+        if(dirty_query_epoch_[other]==stamp && other<moving)continue;
         if(!process_pair(moving,other))return false;
       }
       return true;
     }
-    return query_against_node(moving,node.left,dirty) &&
-           query_against_node(moving,node.right,dirty);
+    return query_against_node(moving,node.left,stamp) &&
+           query_against_node(moving,node.right,stamp);
   }
   QuadIntersectionReport query_dirty(const std::vector<Id> &dirty_faces,
                                      std::size_t max_reported_pairs=16) {
@@ -624,14 +627,23 @@ class QuadBvh {
     limit_=max_reported_pairs;
     report_=QuadIntersectionReport{};
     if(dirty_faces.empty())return std::move(report_);
-    std::vector<std::uint8_t> dirty(boxes_.size(),0);
-    for(Id face:dirty_faces) {
-      if(face>=boxes_.size())throw std::invalid_argument("dirty quad index is invalid");
-      dirty[face]=1;
+    if(query_epoch_==std::numeric_limits<std::uint32_t>::max()) {
+      std::fill(dirty_query_epoch_.begin(),dirty_query_epoch_.end(),0);
+      query_epoch_=0;
     }
-    for(Id face=0;face<boxes_.size();++face)if(dirty[face]) {
+    ++query_epoch_;
+    // Sorting just the dirty set is O(D log D) rather than allocating and
+    // scanning a F-element face mask every stroke (D << F for local brushes).
+    std::vector<Id> faces=dirty_faces;
+    std::sort(faces.begin(),faces.end());
+    faces.erase(std::unique(faces.begin(),faces.end()),faces.end());
+    for(Id face:faces) {
+      if(face>=boxes_.size())throw std::invalid_argument("dirty quad index is invalid");
+      dirty_query_epoch_[face]=query_epoch_;
+    }
+    for(Id face:faces) {
       ++report_.dirty_face_queries;
-      if(!query_against_node(face,0,dirty))break;
+      if(!query_against_node(face,0,query_epoch_))break;
     }
     return std::move(report_);
   }
