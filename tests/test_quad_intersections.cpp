@@ -108,6 +108,7 @@ int main(){
     const auto found=find_quad_self_intersections(grid);
     assert(found.pairs.empty());
     assert(found.adjacent_pairs_ignored>0);
+    assert(found.shared_feature_fastpath_skips>0);
     // Candidate count is far below an exhaustive O(Q^2) scan.
     const std::uint64_t all_pairs=grid.quads.size()*(grid.quads.size()-1)/2;
     assert(found.candidate_quad_pairs<all_pairs/10);
