@@ -97,7 +97,7 @@ int main() {
       assert(sorted_pairs(dirty)==sorted_pairs(full));
       assert(dirty.pairs.empty());
       assert(dirty.dirty_face_queries==4);
-      assert(dirty.candidate_quad_pairs < full.candidate_quad_pairs);
+      assert(dirty.bvh_pair_tests < full.bvh_pair_tests);
     }
     assert(prepared.dirty_update_count()==12);
   }
@@ -118,31 +118,34 @@ int main() {
     auto t0=Clock::now();
     PreparedQuadCollisionChecker full(original);
     assert(full.check_initial(1).pairs.empty());
-    std::uint64_t full_triangle_tests=0;
+    std::uint64_t full_triangle_tests=0,full_node_tests=0;
     for(const auto &frame:frames) {
       const auto result=full.check_positions(frame,1);
       assert(result.pairs.empty());
       full_triangle_tests+=result.triangle_pair_tests;
+      full_node_tests+=result.bvh_pair_tests;
     }
     auto t1=Clock::now();
     PreparedQuadCollisionChecker partial(original);
     assert(partial.check_initial(1).pairs.empty());
-    std::uint64_t dirty_triangle_tests=0,dirty_faces=0;
+    std::uint64_t dirty_triangle_tests=0,dirty_faces=0,dirty_node_tests=0;
     for(const auto &frame:frames) {
       const auto result=partial.check_positions_dirty(frame,{center},1);
       assert(result.pairs.empty());
       dirty_triangle_tests+=result.triangle_pair_tests;
       dirty_faces+=result.dirty_face_queries;
+      dirty_node_tests+=result.bvh_pair_tests;
     }
     auto t2=Clock::now();
     const double full_ms=std::chrono::duration<double,std::milli>(t1-t0).count();
     const double dirty_ms=std::chrono::duration<double,std::milli>(t2-t1).count();
-    assert(dirty_triangle_tests<full_triangle_tests);
+    assert(dirty_node_tests<full_node_tests);
     assert(dirty_faces==frames.size()*4);
     std::cout<<"Dirty collision benchmark (48x48 quads, 24 sparse frames): "
              <<full_ms<<" ms full vs "<<dirty_ms<<" ms dirty; SAT triangle pairs "
              <<full_triangle_tests<<" full vs "<<dirty_triangle_tests
-             <<" dirty; dirty quad queries "<<dirty_faces<<'\n';
+             <<" dirty; BVH node tests "<<full_node_tests<<" full vs "
+             <<dirty_node_tests<<" dirty; dirty quad queries "<<dirty_faces<<'\n';
   }
   std::cout<<"Dirty collision BVH tests passed.\n";
 }
