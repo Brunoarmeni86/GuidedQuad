@@ -47,6 +47,8 @@ struct SurfaceProjectionStats {
   std::uint32_t rejected_steps = 0;
   std::uint32_t collision_rejected_steps = 0;
   std::uint64_t collision_validation_passes = 0;
+  std::uint64_t collision_bvh_builds = 0;
+  std::uint64_t collision_bvh_refits = 0;
   std::uint64_t distance_rejected_targets = 0; // target queries outside original radius
   std::uint32_t moved_vertices = 0;
   double initial_rms_distance = 0.0; // vertices interior to the source surface
