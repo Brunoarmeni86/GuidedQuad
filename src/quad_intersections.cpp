@@ -291,18 +291,31 @@ class QuadBvh {
   std::vector<Vec3> centers_;
   std::vector<Id> indices_;
   std::vector<Node> nodes_;
+  std::vector<Id> parent_node_, quad_leaf_;
+  std::vector<std::uint32_t> node_epoch_, vertex_epoch_;
+  std::vector<Vec3> local_candidate_positions_;
+  std::vector<Id> affected_nodes_;
+  std::uint32_t update_epoch_ = 0;
+  Vec3 world_origin_{0,0,0};
+  double world_scale_ = 1.0;
+  std::uint64_t local_node_updates_ = 0;
   QuadIntersectionReport report_;
   std::size_t limit_;
 
-  Id build(Id first,Id end){
+  Id build(Id first,Id end,Id parent=std::numeric_limits<Id>::max()){
     const Id self=static_cast<Id>(nodes_.size());
     nodes_.push_back({});
+    parent_node_.push_back(parent);
     Aabb box,centroid;
     for(Id i=first;i<end;++i){
       const Id q=indices_[i];box.extend(boxes_[q]);centroid.extend(centers_[q]);
     }
     nodes_[self].box=box;nodes_[self].first=first;nodes_[self].count=end-first;
-    if(end-first<=8){nodes_[self].leaf=true;return self;}
+    if(end-first<=8){
+      nodes_[self].leaf=true;
+      for(Id k=first;k<end;++k)quad_leaf_[indices_[k]]=self;
+      return self;
+    }
     const Vec3 extent=sub(centroid.hi,centroid.lo);
     int dim=extent.y>extent.x?1:0;
     if(extent.z>axis(extent,dim))dim=2;
@@ -312,7 +325,7 @@ class QuadBvh {
         const double av=axis(centers_[a],dim),bv=axis(centers_[b],dim);
         return av<bv||(av==bv&&a<b);
       });
-    const Id left=build(first,mid),right=build(mid,end);
+    const Id left=build(first,mid,self),right=build(mid,end,self);
     nodes_[self].left=left;nodes_[self].right=right;
     return self;
   }
@@ -400,6 +413,8 @@ class QuadBvh {
     const double scale=std::max({hi.x-lo.x,hi.y-lo.y,hi.z-lo.z});
     if(!(scale>0)||!std::isfinite(scale))
       throw std::invalid_argument("quad mesh bounds are degenerate or unrepresentable");
+    world_origin_=lo;
+    world_scale_=scale;
     positions_.reserve(mesh.vertices.size());
     for(Vec3 p:mesh.vertices){
       // Normalize geometry to a unit-scale box to avoid tiny-scale SAT issues.
@@ -429,8 +444,14 @@ class QuadBvh {
       if(!(len_a>1e-14&&len_b>1e-14)||dot(na,nb)<=0)
         throw std::invalid_argument("quad has degenerate or folded split triangles");
     }
-    nodes_.reserve(mesh.quads.size()/4+16);
+    const std::size_t estimated_nodes=mesh.quads.size()/4+16;
+    nodes_.reserve(estimated_nodes);
+    parent_node_.reserve(estimated_nodes);
+    quad_leaf_.resize(mesh.quads.size());
     build(0,static_cast<Id>(mesh.quads.size()));
+    node_epoch_.assign(nodes_.size(),0);
+    vertex_epoch_.assign(positions_.size(),0);
+    local_candidate_positions_.resize(positions_.size());
   }
   void refit(const std::vector<Vec3> &vertices) {
     if(vertices.size()!=positions_.size()) {
@@ -470,6 +491,8 @@ class QuadBvh {
     // remain immutable; only the stored geometry and BVH node boxes change.
     positions_.swap(staged_positions_);
     boxes_.swap(staged_boxes_);
+    world_origin_=lo;
+    world_scale_=scale;
     // Nodes are allocated parent-first, so reverse order is bottom-up.
     for(std::size_t idx=nodes_.size();idx>0;) {
       Node &node=nodes_[--idx];
