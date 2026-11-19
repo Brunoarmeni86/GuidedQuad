@@ -23,6 +23,7 @@ struct QuadIntersectionReport {
   std::uint64_t adjacent_pairs_ignored = 0;
   std::uint64_t adjacent_pairs_checked = 0;
   std::uint64_t shared_feature_fastpath_skips = 0;
+  std::uint64_t dirty_face_queries = 0; // individually queried moving quads
   bool truncated = false;
 };
 
@@ -43,7 +44,20 @@ class PreparedQuadCollisionChecker {
   QuadIntersectionReport check_positions(
       const std::vector<Vec3> &positions,
       std::size_t max_reported_pairs=16);
+
+  // Only query pairs involving a face incident to an actually changed
+  // vertex. Requires a previously checked collision-free state. Every
+  // changed vertex MUST appear in dirty_vertices, else throws. A positive
+  // collision is rejected and the last clean checker state restored.
+  // Full vertex validation + BVH refit are still O(V + F); only collision
+  // queries are dirty-face-local. No collision can be missed solely because
+  // two unchanged quads were omitted from a clean baseline.
+  QuadIntersectionReport check_positions_dirty(
+      const std::vector<Vec3> &positions,
+      const std::vector<std::uint32_t> &dirty_vertices,
+      std::size_t max_reported_pairs=16);
   std::uint64_t refit_count() const;
+  std::uint64_t dirty_update_count() const;
 
  private:
   struct Impl;
