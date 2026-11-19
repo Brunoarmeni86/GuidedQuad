@@ -98,6 +98,27 @@ int main() {
            sorted_pairs(find_quad_self_intersections(patch,1)));
   }
   {
+    // A candidate outside the old normalization frame can ALSO collide.
+    // Ensure full recenter detects it, then rolls back safely and lets the
+    // next valid local edit proceed from a clean baseline.
+    auto input=separate_quads();
+    PreparedQuadCollisionChecker checker(input);
+    assert(checker.check_initial().pairs.empty());
+    auto folded=input.vertices;
+    folded[4].x=-1.0;folded[5].x=0.5;
+    folded[6].x=0.5;folded[7].x=-1.0;
+    const auto hit=checker.check_positions_dirty(folded,{4,5,6,7},1);
+    assert(hit.pairs.size()==1);
+    assert(checker.full_refit_fallback_count()>=1);
+    assert(checker.check_initial().pairs.empty());
+    auto safe=input.vertices;
+    for(std::size_t i=4;i<8;++i)safe[i].x+=0.1;
+    assert(checker.check_positions_dirty(safe,{4,5,6,7},1).pairs.empty());
+    input.vertices=safe;
+    assert(sorted_pairs(checker.check_initial(1))==
+           sorted_pairs(find_quad_self_intersections(input,1)));
+  }
+  {
     // An unused vertex has no collision-relevant faces. Its position must
     // nevertheless become the accepted baseline for future dirty checks.
     auto patch=separate_quads();
