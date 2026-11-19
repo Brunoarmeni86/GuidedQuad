@@ -653,6 +653,7 @@ struct PreparedQuadCollisionChecker::Impl {
   std::vector<Vec3> accepted_positions;
   std::vector<std::vector<Id>> incident_quads;
   std::uint64_t refits=0,dirty_updates=0;
+  std::uint64_t local_refits=0,full_refit_fallbacks=0;
   bool clean_baseline=false;
   explicit Impl(const QuadPatchMesh &input)
       : mesh(input), bvh(mesh,16), accepted_positions(input.vertices),
@@ -702,36 +703,53 @@ QuadIntersectionReport PreparedQuadCollisionChecker::check_positions_dirty(
   }
   std::vector<std::uint8_t> faces(impl_->mesh.quads.size(),0);
   std::vector<Id> changed_faces;
+  std::vector<Id> changed_vertices;
+  changed_vertices.reserve(dirty_vertices.size());
   for(std::size_t k=0;k<positions.size();++k) {
     const Vec3 p=positions[k],q=impl_->accepted_positions[k];
     if(!finite(p))throw std::invalid_argument("dirty update has nonfinite vertex");
     const bool changed=(p.x!=q.x || p.y!=q.y || p.z!=q.z);
     if(changed&&!declared[k])
       throw std::invalid_argument("dirty list omits an altered vertex");
-    if(changed)for(Id face:impl_->incident_quads[k]) {
-      if(!faces[face]){faces[face]=1;changed_faces.push_back(face);}
+    if(changed) {
+      changed_vertices.push_back(static_cast<Id>(k));
+      for(Id face:impl_->incident_quads[k]) {
+        if(!faces[face]){faces[face]=1;changed_faces.push_back(face);}
+      }
     }
   }
-  if(changed_faces.empty())return QuadIntersectionReport{};
+  if(changed_faces.empty()) {
+    // Orphan vertices have no incident quad and cannot introduce a surface
+    // collision; keep the accepted input snapshot synchronized regardless.
+    impl_->accepted_positions=positions;
+    return QuadIntersectionReport{};
+  }
   // A clean prior state proves that a newly introduced intersection must
-  // involve at least one changed face. Every changed face is queried against
-  // the full up-to-date tree, including unchanged neighboring geometry.
-  impl_->bvh.refit(positions);
-  ++impl_->refits;
+  // involve at least one changed face. The original normalization frame is
+  // held fixed for local refits. Large motion falls back to a full recenter.
+  const auto update_tree=[&](const std::vector<Vec3> &target) {
+    if(impl_->bvh.refit_local(target,changed_vertices,changed_faces)) {
+      ++impl_->local_refits;
+    } else {
+      impl_->bvh.refit(target);
+      ++impl_->full_refit_fallbacks;
+    }
+    ++impl_->refits;
+  };
+  update_tree(positions);
   ++impl_->dirty_updates;
   try {
     auto report=impl_->bvh.query_dirty(changed_faces,limit);
     if(report.pairs.empty()) {
       impl_->accepted_positions=positions;
     } else {
-      // Leave a dirty attempt's failure non-destructive for backtracking.
-      impl_->bvh.refit(impl_->accepted_positions);
-      ++impl_->refits;
+      // Failed candidate: refit back to the last verified clean positions
+      // before another backtracking attempt, without changing topology.
+      update_tree(impl_->accepted_positions);
     }
     return report;
   } catch(...) {
-    impl_->bvh.refit(impl_->accepted_positions);
-    ++impl_->refits;
+    update_tree(impl_->accepted_positions);
     throw;
   }
 }
@@ -742,6 +760,18 @@ std::uint64_t PreparedQuadCollisionChecker::refit_count() const {
 std::uint64_t PreparedQuadCollisionChecker::dirty_update_count() const {
   if(!impl_)throw std::logic_error("collision checker was moved from");
   return impl_->dirty_updates;
+}
+std::uint64_t PreparedQuadCollisionChecker::local_refit_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->local_refits;
+}
+std::uint64_t PreparedQuadCollisionChecker::full_refit_fallback_count() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->full_refit_fallbacks;
+}
+std::uint64_t PreparedQuadCollisionChecker::local_bvh_node_updates() const {
+  if(!impl_)throw std::logic_error("collision checker was moved from");
+  return impl_->bvh.local_node_updates();
 }
 
 QuadIntersectionReport find_quad_self_intersections(
