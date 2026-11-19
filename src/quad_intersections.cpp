@@ -64,10 +64,135 @@ bool triangle_intersection(const Triangle &a,const Triangle &b) {
   for(Vec3 e:be)if(separated_on_axis(a,b,cross(bn,e)))return false;
   return true;
 }
-bool share_vertex(const std::array<Id,4> &a,const std::array<Id,4> &b){
-  for(Id i:a)for(Id j:b)if(i==j)return true;
+struct SharedFeature {
+  std::array<Id,4> indices{};
+  std::uint32_t count=0;
+};
+SharedFeature shared_vertices(const std::array<Id,4> &a,
+                              const std::array<Id,4> &b) {
+  SharedFeature shared;
+  for(Id i:a)for(Id j:b)if(i==j) {
+    shared.indices[shared.count++]=i;
+    break;
+  }
+  return shared;
+}
+
+struct Vec2 { double x,y; };
+Vec2 project(Vec3 p,int drop) {
+  return drop==0?Vec2{p.y,p.z}:
+         drop==1?Vec2{p.x,p.z}:Vec2{p.x,p.y};
+}
+double orient(Vec2 a,Vec2 b,Vec2 c) {
+  return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+}
+double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
+  int drop=0;
+  if(std::abs(normal.y)>std::abs(normal.x))drop=1;
+  if(std::abs(normal.z)>std::abs(axis(normal,drop)))drop=2;
+  const Vec2 ba[3]={project(b.v[0],drop),project(b.v[1],drop),project(b.v[2],drop)};
+  const double winding=orient(ba[0],ba[1],ba[2])>=0.0?1.0:-1.0;
+  std::vector<Vec2> poly={project(a.v[0],drop),project(a.v[1],drop),project(a.v[2],drop)};
+  const double eps=1e-12;
+  for(int edge=0;edge<3;++edge) {
+    const Vec2 p=ba[edge],q=ba[(edge+1)%3];
+    std::vector<Vec2> clipped;
+    if(poly.empty())return 0.0;
+    clipped.reserve(poly.size()+2);
+    for(std::size_t i=0;i<poly.size();++i) {
+      const Vec2 before=poly[i],after=poly[(i+1)%poly.size()];
+      const double d0=winding*orient(p,q,before);
+      const double d1=winding*orient(p,q,after);
+      const bool in0=d0>=-eps,in1=d1>=-eps;
+      if(in0!=in1) {
+        const double den=d0-d1;
+        const double t=std::abs(den)>1e-30?
+            std::clamp(d0/den,0.0,1.0):0.5;
+        clipped.push_back({before.x+t*(after.x-before.x),
+                           before.y+t*(after.y-before.y)});
+      }
+      if(in1)clipped.push_back(after);
+    }
+    poly.swap(clipped);
+  }
+  if(poly.size()<3)return 0.0;
+  double twice_area=0;
+  for(std::size_t i=0;i<poly.size();++i) {
+    const Vec2 p=poly[i],q=poly[(i+1)%poly.size()];
+    twice_area+=p.x*q.y-p.y*q.x;
+  }
+  return std::abs(twice_area)*0.5;
+}
+double feature_distance(Vec3 p,const SharedFeature &shared,
+                        const std::vector<Vec3> &positions){
+  if(shared.count==1) {
+    const Vec3 d=sub(p,positions[shared.indices[0]]);
+    return std::hypot(d.x,d.y,d.z);
+  }
+  if(shared.count==2) {
+    const Vec3 a=positions[shared.indices[0]],b=positions[shared.indices[1]];
+    const Vec3 ab=sub(b,a),ap=sub(p,a);
+    const double den=dot(ab,ab);
+    const double t=den>0?std::clamp(dot(ap,ab)/den,0.0,1.0):0.0;
+    const Vec3 q{a.x+t*ab.x,a.y+t*ab.y,a.z+t*ab.z};
+    const Vec3 d=sub(p,q);
+    return std::hypot(d.x,d.y,d.z);
+  }
+  return 0.0;
+}
+bool point_in_triangle(Vec3 p,const Triangle &t,Vec3 n){
+  for(int i=0;i<3;++i) {
+    const Vec3 edge=sub(t.v[(i+1)%3],t.v[i]);
+    const Vec3 ap=sub(p,t.v[i]);
+    if(dot(cross(edge,ap),n)<-1e-12)return false;
+  }
+  return true;
+}
+bool edge_crosses_triangle_away(const Triangle &a,const Triangle &b,
+                                const SharedFeature &shared,
+                                const std::vector<Vec3> &positions) {
+  const Vec3 n=cross(sub(b.v[1],b.v[0]),sub(b.v[2],b.v[0]));
+  const double norm=std::hypot(n.x,n.y,n.z);
+  if(!(norm>1e-14))return false;
+  const Vec3 unit{n.x/norm,n.y/norm,n.z/norm};
+  for(int i=0;i<3;++i) {
+    const Vec3 p=a.v[i],q=a.v[(i+1)%3];
+    const double d0=dot(sub(p,b.v[0]),unit);
+    const double d1=dot(sub(q,b.v[0]),unit);
+    if((d0>1e-12&&d1>1e-12)||(d0< -1e-12&&d1< -1e-12))
+      continue;
+    if(std::abs(d0-d1)<1e-14)continue; // coplanar segment handled separately
+    const double t=d0/(d0-d1);
+    if(t< -1e-12||t>1.0+1e-12)continue;
+    const double u=std::clamp(t,0.0,1.0);
+    const Vec3 hit{p.x+u*(q.x-p.x),p.y+u*(q.y-p.y),p.z+u*(q.z-p.z)};
+    if(point_in_triangle(hit,b,n) &&
+       feature_distance(hit,shared,positions)>1e-9)return true;
+  }
   return false;
 }
+// Both triangles may touch at one legitimate shared vertex or shared edge.
+// Only report a witness away from that allowed contact feature.
+bool illegal_adjacent_intersection(const Triangle &a,const Triangle &b,
+                                    const SharedFeature &shared,
+                                    const std::vector<Vec3> &positions) {
+  if(!triangle_intersection(a,b))return false;
+  if(shared.count>=3)return true;
+  const Vec3 n1=cross(sub(a.v[1],a.v[0]),sub(a.v[2],a.v[0]));
+  const Vec3 n2=cross(sub(b.v[1],b.v[0]),sub(b.v[2],b.v[0]));
+  const double len1=std::hypot(n1.x,n1.y,n1.z);
+  const double len2=std::hypot(n2.x,n2.y,n2.z);
+  if(!(len1>1e-14&&len2>1e-14))return false;
+  const Vec3 unit{n1.x/len1,n1.y/len1,n1.z/len1};
+  const double parallel=std::abs(dot(n1,n2)/(len1*len2));
+  bool coplanar=parallel>1.0-1e-10;
+  for(Vec3 p:b.v)if(std::abs(dot(sub(p,a.v[0]),unit))>1e-10)
+    coplanar=false;
+  if(coplanar)return coplanar_overlap_area(a,b,n1)>1e-13;
+  return edge_crosses_triangle_away(a,b,shared,positions)||
+         edge_crosses_triangle_away(b,a,shared,positions);
+}
+
 class QuadBvh {
   struct Node {
     Aabb box;
@@ -116,17 +241,19 @@ class QuadBvh {
     if(a==b)return true;
     if(a>b)std::swap(a,b);
     const auto &qa=mesh_.quads[a],&qb=mesh_.quads[b];
-    if(share_vertex(qa,qb)){
-      ++report_.adjacent_pairs_ignored;
-      return true;
-    }
     if(!boxes_[a].overlaps(boxes_[b]))return true;
+    const SharedFeature shared=shared_vertices(qa,qb);
+    if(shared.count)++report_.adjacent_pairs_checked;
     ++report_.candidate_quad_pairs;
     for(int ia=0;ia<2;++ia){
       const Triangle ta=tri(a,ia);
       for(int ib=0;ib<2;++ib){
         ++report_.triangle_pair_tests;
-        if(triangle_intersection(ta,tri(b,ib))){
+        const Triangle tb=tri(b,ib);
+        const bool colliding=shared.count?
+            illegal_adjacent_intersection(ta,tb,shared,positions_):
+            triangle_intersection(ta,tb);
+        if(colliding){
           if(report_.pairs.size()>=limit_){report_.truncated=true;return false;}
           report_.pairs.push_back({a,b});
           if(report_.pairs.size()==limit_) {report_.truncated=true;return false;}
@@ -134,6 +261,7 @@ class QuadBvh {
         }
       }
     }
+    if(shared.count)++report_.adjacent_pairs_ignored;
     return true;
   }
 
