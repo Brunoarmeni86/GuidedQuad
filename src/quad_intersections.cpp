@@ -452,6 +452,7 @@ class QuadBvh {
     node_epoch_.assign(nodes_.size(),0);
     vertex_epoch_.assign(positions_.size(),0);
     local_candidate_positions_.resize(positions_.size());
+    affected_nodes_.reserve(nodes_.size());
   }
   void refit(const std::vector<Vec3> &vertices) {
     if(vertices.size()!=positions_.size()) {
@@ -507,6 +508,96 @@ class QuadBvh {
       node.box=bounds;
     }
   }
+  // Return false only when a candidate escapes the fixed normalization
+  // frame; the caller must then use the full refit (which can recenter).
+  // All validation completes BEFORE changing any live vertex or BVH box.
+  bool refit_local(const std::vector<Vec3> &vertices,
+                   const std::vector<Id> &dirty_vertices,
+                   const std::vector<Id> &dirty_faces) {
+    if(vertices.size()!=positions_.size())
+      throw std::invalid_argument("local BVH refit cannot change vertex count");
+    if(dirty_faces.empty())return true;
+    if(update_epoch_==std::numeric_limits<std::uint32_t>::max()) {
+      std::fill(vertex_epoch_.begin(),vertex_epoch_.end(),0);
+      std::fill(node_epoch_.begin(),node_epoch_.end(),0);
+      update_epoch_=0;
+    }
+    ++update_epoch_;
+    for(Id id:dirty_vertices) {
+      if(id>=positions_.size())
+        throw std::invalid_argument("local BVH dirty vertex out of bounds");
+      const Vec3 p=vertices[id];
+      if(!finite(p))
+        throw std::invalid_argument("local BVH dirty vertex is nonfinite");
+      const Vec3 normalized{(p.x-world_origin_.x)/world_scale_,
+                            (p.y-world_origin_.y)/world_scale_,
+                            (p.z-world_origin_.z)/world_scale_};
+      if(!finite(normalized) ||
+         normalized.x < -0.25 || normalized.x > 1.25 ||
+         normalized.y < -0.25 || normalized.y > 1.25 ||
+         normalized.z < -0.25 || normalized.z > 1.25) {
+        // Keep geometric scale reasonably close to unit size. Outside this
+        // interval, recenter the *whole* model before any collision check.
+        return false;
+      }
+      vertex_epoch_[id]=update_epoch_;
+      local_candidate_positions_[id]=normalized;
+    }
+    const auto get=[&](Id id) -> Vec3 {
+      return vertex_epoch_[id]==update_epoch_?
+             local_candidate_positions_[id]:positions_[id];
+    };
+    // Staging is sparse: unchanged faces never recompute their positions,
+    // normals or AABBs.
+    if(staged_boxes_.size()!=boxes_.size())staged_boxes_.resize(boxes_.size());
+    for(Id face:dirty_faces) {
+      if(face>=mesh_.quads.size())
+        throw std::invalid_argument("local BVH dirty face out of bounds");
+      const auto &q=mesh_.quads[face];
+      const Vec3 a=get(q[0]),b=get(q[1]),c=get(q[2]),d=get(q[3]);
+      const Vec3 n1=cross(sub(b,a),sub(c,a));
+      const Vec3 n2=cross(sub(c,a),sub(d,a));
+      if(!(std::hypot(n1.x,n1.y,n1.z)>1e-14 &&
+           std::hypot(n2.x,n2.y,n2.z)>1e-14) ||
+         dot(n1,n2)<=0.0) {
+        throw std::invalid_argument("local BVH refit would create a degenerate or folded quad");
+      }
+      Aabb bounds;
+      bounds.extend(a);bounds.extend(b);bounds.extend(c);bounds.extend(d);
+      staged_boxes_[face]=bounds;
+    }
+    // Commit: preallocate node scratch once; bottom-up tree recomputation
+    // does not allocate or invoke any fallible operations.
+    for(Id id:dirty_vertices)positions_[id]=local_candidate_positions_[id];
+    for(Id face:dirty_faces)boxes_[face]=staged_boxes_[face];
+    affected_nodes_.clear();
+    for(Id face:dirty_faces) {
+      Id node=quad_leaf_[face];
+      while(node!=std::numeric_limits<Id>::max() &&
+            node_epoch_[node]!=update_epoch_) {
+        node_epoch_[node]=update_epoch_;
+        affected_nodes_.push_back(node);
+        node=parent_node_[node];
+      }
+    }
+    std::sort(affected_nodes_.begin(),affected_nodes_.end(),
+              [](Id a,Id b){return a>b;});
+    for(Id id:affected_nodes_) {
+      Node &node=nodes_[id];
+      Aabb bounds;
+      if(node.leaf) {
+        for(Id k=node.first;k<node.first+node.count;++k)
+          bounds.extend(boxes_[indices_[k]]);
+      } else {
+        bounds.extend(nodes_[node.left].box);
+        bounds.extend(nodes_[node.right].box);
+      }
+      node.box=bounds;
+    }
+    local_node_updates_+=affected_nodes_.size();
+    return true;
+  }
+  std::uint64_t local_node_updates() const {return local_node_updates_;}
   // Traverse only AABBs touched by dirty quads. If two dirty quads
   // overlap, the larger-index query skips the already-visited pair.
   bool query_against_node(Id moving,Id node_index,
