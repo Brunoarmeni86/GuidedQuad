@@ -62,6 +62,10 @@ int main() {
     assert(projected.stats.final_rms_distance<projected.stats.initial_rms_distance*0.25);
     assert(projected.stats.moved_vertices>50);
     assert(projected.stats.skipped_degenerate_triangles==0);
+    assert(projected.stats.collision_bvh_builds==1);
+    assert(projected.stats.collision_bvh_refits>0);
+    assert(projected.stats.collision_validation_passes==
+           projected.stats.collision_bvh_refits+1);
     for(std::size_t k=0;k<patch.vertices.size();++k) {
       if(is_boundary(k,base.u_segments,base.v_segments))
         assert(close(patch.vertices[k],projected.mesh.vertices[k]));
