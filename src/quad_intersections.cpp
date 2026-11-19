@@ -48,8 +48,11 @@ bool separated_on_axis(const Triangle &a,const Triangle &b,Vec3 direction) {
     amin=std::min(amin,av);amax=std::max(amax,av);
     bmin=std::min(bmin,bv);bmax=std::max(bmax,bv);
   }
-  // Tolerance for round-off; touching is conservatively considered collision.
-  return amax<bmin-1e-13 || bmax<amin-1e-13;
+  // The geometry is normalized to unit-scale. The previous 1e-13 fixed
+  // tolerance incorrectly classified distinct parallel layers separated by
+  // ~1e-14 as collisions. Keep a smaller conservative numeric error margin.
+  constexpr double epsilon=4e-15;
+  return amax<bmin-epsilon || bmax<amin-epsilon;
 }
 
 bool triangle_intersection(const Triangle &a,const Triangle &b) {
@@ -95,7 +98,7 @@ double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
   const Vec2 ba[3]={project(b.v[0],drop),project(b.v[1],drop),project(b.v[2],drop)};
   const double winding=orient(ba[0],ba[1],ba[2])>=0.0?1.0:-1.0;
   std::vector<Vec2> poly={project(a.v[0],drop),project(a.v[1],drop),project(a.v[2],drop)};
-  const double eps=1e-12;
+  const double eps=4e-15;
   for(int edge=0;edge<3;++edge) {
     const Vec2 p=ba[edge],q=ba[(edge+1)%3];
     std::vector<Vec2> clipped;
@@ -146,7 +149,7 @@ bool point_in_triangle(Vec3 p,const Triangle &t,Vec3 n){
   for(int i=0;i<3;++i) {
     const Vec3 edge=sub(t.v[(i+1)%3],t.v[i]);
     const Vec3 ap=sub(p,t.v[i]);
-    if(dot(cross(edge,ap),n)<-1e-12)return false;
+    if(dot(cross(edge,ap),n)<-1e-14)return false;
   }
   return true;
 }
@@ -169,7 +172,7 @@ bool edge_crosses_triangle_away(const Triangle &a,const Triangle &b,
     const double u=std::clamp(t,0.0,1.0);
     const Vec3 hit{p.x+u*(q.x-p.x),p.y+u*(q.y-p.y),p.z+u*(q.z-p.z)};
     if(point_in_triangle(hit,b,n) &&
-       feature_distance(hit,shared,positions)>1e-9)return true;
+       feature_distance(hit,shared,positions)>1e-12)return true;
   }
   return false;
 }
