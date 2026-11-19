@@ -27,6 +27,19 @@ Projection stats include \`collision_dirty_passes\` and \`collision_dirty_face_q
 - Dirty checking should help most on brushes or sparse deformation updates that change only a small part of the patch. For broad deformations the full BVH pass remains preferable.
 - The test suite contains a reproducible 48×48-quad, 24-frame sparse-center update microbenchmark. The Ubuntu Release CI prints wall-clock durations, BVH node visits and SAT triangle tests for both methods. Treat a single-run timing as indicative, not an Exoside performance comparison.
 
+## Measured sparse-update benchmark (GitHub Actions, Ubuntu Release)
+
+On one **48×48 quad patch (2,304 quads)** over **24 frames**, each frame changing one interior vertex (and the four incident quads), the Linux Release benchmark reported:
+
+| Diagnostic | Complete refitted-tree check | Dirty-face check |
+|---|---:|---:|
+| Wall-clock time including checker setup/initial verification | **13.362 ms** | **4.53767 ms** |
+| BVH node tests | **225,408** | **6,048** |
+| Triangle-pair SAT tests | **576** | **576** |
+| Individually queried dirty quads | all / n.a. | **96 total** |
+
+The dirty path required **~66.0% less time** on this synthetic sparse fixture (~2.94× speedup), and **~97.3% fewer BVH-node tests**. SAT triangle comparisons did not decrease, so this benefit comes primarily from skipping unchanged broadphase traversal. These are single-run GitHub runner measurements, not stable p50/p95 timings, large-sculpt wall-clock benchmarks, or overall sculpting performance claims. With broad/dense deformations the code intentionally falls back to full queries.
+
 ## Precision
 
 The earlier 2D orientation helper ran all calculations with \`long double\`. A new **filtered predicate** first estimates a double determinant; if it is well above a conservative floating-point cancellation bound, it uses the fast result, otherwise it recomputes with \`long double\`.
