@@ -73,6 +73,33 @@ int main() {
     assert(bad.collisions.size()==1);
   }
   {
+    // Non-coplanar adjacent faces can cross along a segment that extends
+    // beyond their shared corner: touching the corner alone is NOT a reason
+    // to ignore the intersection.
+    QuadPatchMesh m=one_quad(0,0);
+    m.vertices.insert(m.vertices.end(), {
+      {1,1,0},{0.25,0.25,-0.5},{0.25,0.25,0.5},{1,1,1}});
+    m.quads.push_back({4,5,6,7});
+    const auto independent=find_quad_self_intersections(m);
+    assert(independent.pairs.size()==1);
+    const auto stitched=find_patch_collection_intersections({
+      one_quad(0,0),{{{1,1,0},{0.25,0.25,-0.5},
+                     {0.25,0.25,0.5},{1,1,1}},{{0,1,2,3}}}},
+      {{0,2,1,0}});
+    assert(stitched.collisions.size()==1);
+  }
+  {
+    // A legitimate 90-degree hinge shares an edge but has no intersection
+    // away from the sewn edge itself.
+    QuadPatchMesh m=one_quad(0,0);
+    m.vertices.push_back({1,0,1});
+    m.vertices.push_back({1,1,1});
+    m.quads.push_back({1,4,5,2});
+    const auto report=find_quad_self_intersections(m);
+    assert(report.pairs.empty());
+    assert(report.adjacent_pairs_checked>0);
+  }
+  {
     // Invalid seam mapping must be rejected rather than silently welding
     // physically separated coordinates.
     bool rejected=false;
