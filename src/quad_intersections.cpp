@@ -89,14 +89,20 @@ Vec2 project(Vec3 p,int drop) {
          drop==1?Vec2{p.x,p.z}:Vec2{p.x,p.y};
 }
 double orient(Vec2 a,Vec2 b,Vec2 c) {
-  // Use extended intermediate precision when supported (Linux/macOS).
-  // Windows long double may be identical to double: this is not a substitute
-  // for exact orientation predicates in pathological meshes.
-  const long double abx=static_cast<long double>(b.x)-a.x;
-  const long double aby=static_cast<long double>(b.y)-a.y;
-  const long double acx=static_cast<long double>(c.x)-a.x;
-  const long double acy=static_cast<long double>(c.y)-a.y;
-  return static_cast<double>(abx*acy-aby*acx);
+  // Filtered 2D determinant. Most clearly noncollinear triples can be
+  // resolved with double precision. Near cancellation uses extended
+  // intermediates where supported, without claiming exact predicates.
+  const double abx=b.x-a.x,aby=b.y-a.y;
+  const double acx=c.x-a.x,acy=c.y-a.y;
+  const double p=abx*acy,q=aby*acx,det=p-q;
+  const double err=16.0*std::numeric_limits<double>::epsilon()*
+                    (std::abs(p)+std::abs(q));
+  if(std::isfinite(det)&&std::abs(det)>err)return det;
+  const long double labx=static_cast<long double>(b.x)-a.x;
+  const long double laby=static_cast<long double>(b.y)-a.y;
+  const long double lacx=static_cast<long double>(c.x)-a.x;
+  const long double lacy=static_cast<long double>(c.y)-a.y;
+  return static_cast<double>(labx*lacy-laby*lacx);
 }
 double coplanar_overlap_area(const Triangle &a,const Triangle &b,Vec3 normal){
   int drop=0;
