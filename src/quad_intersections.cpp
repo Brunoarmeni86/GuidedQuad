@@ -311,6 +311,7 @@ class QuadBvh {
       if(bounds_touch_only_shared_feature(boxes_[a],boxes_[b],
                                           shared,positions_)) {
         ++report_.adjacent_pairs_ignored;
+        ++report_.shared_feature_fastpath_skips;
         return true;
       }
     }
