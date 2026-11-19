@@ -22,6 +22,7 @@ struct QuadIntersectionReport {
   std::uint64_t triangle_pair_tests = 0;
   std::uint64_t adjacent_pairs_ignored = 0;
   std::uint64_t adjacent_pairs_checked = 0;
+  std::uint64_t shared_feature_fastpath_skips = 0;
   bool truncated = false;
 };
 
