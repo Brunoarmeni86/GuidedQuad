@@ -74,7 +74,24 @@ static void measure_case(std::uint32_t n,int frames,bool broad) {
   QuadPatchMesh source=organic_chart(n);
   auto reference=source;
   PreparedQuadCollisionChecker full(source),local(source);
-  assert(full.check_initial(1).pairs.empty());
+  const auto baseline=full.check_initial(2);
+  if(!baseline.pairs.empty()) {
+    const auto first=baseline.pairs.front();
+    std::cerr<<"BAD BASELINE n="<<n<<" broad="<<broad
+             <<" collision "<<first[0]<<","<<first[1]
+             <<" adjacent checked "<<baseline.adjacent_pairs_checked
+             <<" candidate pairs "<<baseline.candidate_quad_pairs<<"\n";
+    for(auto qid:first) {
+      const auto &q=source.quads[qid];
+      std::cerr<<"quad "<<qid<<": ";
+      for(auto v:q) {
+        const auto &p=source.vertices[v];
+        std::cerr<<v<<"("<<p.x<<","<<p.y<<","<<p.z<<") ";
+      }
+      std::cerr<<"\n";
+    }
+  }
+  assert(baseline.pairs.empty());
   assert(local.check_initial(1).pairs.empty());
   using Clock=std::chrono::steady_clock;
   double full_ms=0,local_ms=0;
