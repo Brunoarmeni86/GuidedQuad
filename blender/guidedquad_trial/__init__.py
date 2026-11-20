@@ -136,6 +136,15 @@ def _read_guide_obj(path):
     return vertices, paths
 
 
+def _focus_created_object(context, obj):
+    # Do not depend on an OBJ import addon. Keep the new result visible in
+    # the Outliner and active in the 3D View without changing source data.
+    for selected in context.selected_objects:
+        selected.select_set(False)
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+
+
 def _create_quad_object(context, positions, quads):
     mesh = bpy.data.meshes.new("GuidedQuad Trial Patch")
     mesh.from_pydata(positions, [], quads)
@@ -143,6 +152,7 @@ def _create_quad_object(context, positions, quads):
     obj = bpy.data.objects.new("GuidedQuad_Trial_Patch", mesh)
     context.collection.objects.link(obj)
     obj.display_type = "SOLID"
+    _focus_created_object(context, obj)
     return obj
 
 
@@ -165,7 +175,18 @@ def _create_guide_object(context, positions, paths):
         return None
     obj = bpy.data.objects.new("GuidedQuad_FaceSet_Guides", curve)
     context.collection.objects.link(obj)
+    _focus_created_object(context, obj)
     return obj
+
+
+def _safe_console_text(message):
+    # Reports never need raw user-home or temporary OBJ paths. Preserve
+    # numeric diagnostics; redact the most common absolute path forms.
+    message = message.replace(str(Path.home()), "<HOME>")
+    message = re.sub(
+        r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|/(?:tmp|home|Users|mnt|var)/)[^\\s\\\"']+",
+        "<local-path>", message)
+    return message[-2500:]
 
 
 def _run_cli(executable, args):
@@ -184,8 +205,8 @@ def _run_cli(executable, args):
     return {
         "exit_code": int(process.returncode),
         "elapsed_ms": round(elapsed_ms, 3),
-        "stdout": process.stdout[-2500:],
-        "stderr": process.stderr[-2500:],
+        "stdout": _safe_console_text(process.stdout),
+        "stderr": _safe_console_text(process.stderr),
     }
 
 
@@ -238,7 +259,7 @@ def _execute_action(operator, context, action, work):
                         "GuidedQuad " + status + "; tracker: " + location.name)
         return {"FINISHED"}
     except Exception as exc:
-        message = "{}: {}".format(type(exc).__name__, str(exc))
+        message = _safe_console_text("{}: {}".format(type(exc).__name__, str(exc)))
         try:
             _record(settings, action, obj, "error", start, parameters,
                     cli=cli_info, error=message[:1000])
@@ -293,7 +314,8 @@ def _extract_faceset_guides(settings, obj, executable, parameters):
         positions, paths = _read_guide_obj(output_path)
         if paths:
             _create_guide_object(bpy.context, positions, paths)
-    return {"status": "success", "guide_paths": len(paths), "cli": cli}
+    return {"status": "success" if paths else "no_guides",
+            "guide_paths": len(paths), "cli": cli}
 
 
 def _single_selected_quad(obj):
