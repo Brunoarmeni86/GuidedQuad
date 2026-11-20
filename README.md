@@ -15,6 +15,7 @@ GuidedQuad aims to produce precise, controllable all-quad retopology from artist
 - Retain anchors to source vertices and source triangle edges.
 - Write the resulting polylines as Wavefront OBJ `l` elements.
 - Generate real quad faces within one four-sided guide patch, with hard corner preservation.
+- Experimental CPU 4-RoSy face-direction propagation with weighted soft guides and locked face orientations (separate from actual hard quad-edge constraints).
 - Optionally project only the patch interior onto a source triangulated surface using a CPU BVH with inversion guard and backtracking.
 - Unit tests and an end-to-end projected OBJ export under `tests/`.
 
@@ -33,6 +34,7 @@ ctest --test-dir build -C Release --output-on-failure
 ```sh
 ./build/guidedquad_cli facesets tests/square.obj tests/square_facesets.txt guides_facesets.obj
 ./build/guidedquad_cli contours tests/square.obj tests/square_scalar.txt guides_contour.obj 0
+./build/guidedquad_cli flow tests/square.obj tests/square_flow.txt preview_flow.obj
 ./build/guidedquad_cli patch-loop tests/square.obj flat_quads.obj 0 1 2 3 8 8
 ./build/guidedquad_cli project-loop tests/square.obj tests/curved_surface.obj projected_quads.obj 0 1 2 3 8 8 2 1
 ```
@@ -40,6 +42,8 @@ ctest --test-dir build -C Release --output-on-failure
 On Windows with a multi-config CMake generator, the executable may be under `build/Release/guidedquad_cli.exe`.
 
 The OBJ input must consist of triangle faces with positive indices. The Face Set file contains one region integer **per triangle**; the scalar file contains one number **per vertex**.
+
+The `flow` command reads zero-based per-triangle guide vectors (`triangleIndex dx dy dz weight locked`) and exports **OBJ line directions only**, not a quad mesh. Face Set/Polypaint-to-flow conversion, global cross-field optimization, singularity-aware patch layout and a completed automatic remesher remain future work. See [cross-field notes](docs/CROSS_FIELD.md) and [comparison plan](docs/BENCHMARK_PLAN.md).
 
 Full [V0.3 projection algorithm, limits and benchmarks](docs/PROJECTION_V03.md). The four-sided patch solver is documented in [V0.2 solver notes](docs/SOLVER_V02.md).
 
