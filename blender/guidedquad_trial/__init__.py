@@ -42,9 +42,9 @@ class GQ_TrialSettings(bpy.types.PropertyGroup):
     guide_source: EnumProperty(
         name="Guide Source",
         items=[
-            ("CURVES", "Curve objects", "Four existing Curve objects", "CURVE_DATA", 0),
-            ("GREASE", "Grease Pencil", "Four strokes from one Grease Pencil object", "GREASEPENCIL", 1),
-            ("ANNOTATION", "Notes / Annotations", "Four viewport Annotation strokes", "GREASEPENCIL", 2),
+            ("CURVES", "Curve objects", "Four existing Curve objects"),
+            ("GREASE", "Grease Pencil", "Four strokes from one Grease Pencil object"),
+            ("ANNOTATION", "Notes / Annotations", "Four viewport Annotation strokes"),
         ], default="CURVES",
     )
     ink_object: PointerProperty(
