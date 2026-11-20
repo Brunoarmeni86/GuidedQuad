@@ -65,8 +65,12 @@ def extract_ink_strokes(data, current_frame, is_annotation=False):
             # Ignore invisible/repeated click strokes, retaining diagnostics.
             if all(p == points[0] for p in points[1:]):
                 continue
-            strokes.append({"points": points, "layer": layer.info if is_annotation else layer.name,
-                            "frame": frame.frame_number, "stroke_index": index})
+            strokes.append({
+                "points": points,
+                "layer": getattr(layer, "info", getattr(layer, "name", "Layer")),
+                "frame": frame.frame_number,
+                "stroke_index": index,
+            })
             if len(strokes) > 10000:
                 raise InkGuideError("Too many Grease Pencil strokes (limit 10,000)")
     return strokes
