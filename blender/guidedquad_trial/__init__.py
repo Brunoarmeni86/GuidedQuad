@@ -284,7 +284,14 @@ class GQ_OT_run_trial(bpy.types.Operator):
                 # Temporary filenames may contain local path information; no
                 # raw stdout/stderr or private mesh data is placed in the report.
                 if proc.returncode:
-                    raise TrialError("Native patch generation failed; check Blender console for details")
+                    details = (proc.stderr or proc.stdout or "Native engine returned an error").strip()
+                    # Avoid including temporary/executable full paths in reports
+                    # that artists may share with the developer.
+                    details = details.replace(folder, "<temporary>").replace(
+                        str(executable), "<native_engine>"
+                    )[:500]
+                    report["native_error"] = details
+                    raise TrialError("Native patch generation failed: " + details[:150])
                 metrics = parse_metrics(proc.stdout)
                 report["engine_metrics"] = metrics
                 vertices, quads = parse_quad_obj(output_path)
