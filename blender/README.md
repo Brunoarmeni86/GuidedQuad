@@ -49,6 +49,7 @@ JSON fields include:
 - Evaluated input triangle count; output vertices and quads
 - Native engine timing and total wall-clock duration in milliseconds
 - Projection RMS, initial aspect and Jacobian, BVH builds/refits, dirty collision passes and queried faces
+- **Post-projection output quality**: worst and p95 quad edge aspect ratio, minimum approximate face area, diagonal warpage angle and degenerate quad count
 - Native collision-check exit code and success/failure reason
 
 The tracker does **not** send anything over the network, export your blend file, or include the complete model. Review the JSON before sharing, particularly any error messages.
