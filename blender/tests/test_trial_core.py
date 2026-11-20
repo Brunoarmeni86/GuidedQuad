@@ -85,6 +85,20 @@ class TrialCoreTests(unittest.TestCase):
         with self.assertRaises(core.TrialError):
             core.parse_metrics("GQ_METRICS vertices=25 quads=inf guide_error=0")
 
+    def test_output_quality_metrics(self):
+        coords = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        values = core.quad_mesh_quality(coords, [(0, 1, 2, 3)])
+        self.assertEqual(values["degenerate_quads"], 0)
+        self.assertAlmostEqual(values["worst_edge_aspect_ratio"], 1)
+        self.assertAlmostEqual(values["p95_edge_aspect_ratio"], 1)
+        self.assertAlmostEqual(values["minimum_face_area"], 1)
+        self.assertAlmostEqual(values["maximum_diagonal_warpage_degrees"], 0)
+
+        warped = list(coords)
+        warped[-1] = (0, 1, 0.25)
+        warped_metrics = core.quad_mesh_quality(warped, [(0, 1, 2, 3)])
+        self.assertGreater(warped_metrics["maximum_diagonal_warpage_degrees"], 0)
+
     def test_tracker_file_is_local_json(self):
         with tempfile.TemporaryDirectory() as root:
             payload = {"schema": core.SCHEMA_VERSION, "status": "success"}
