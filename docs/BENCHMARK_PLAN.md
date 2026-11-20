@@ -12,7 +12,7 @@ Analyze public documentation and observable **inputs and outputs** of a legally 
 4. Joint/bent limb with paint-based high- and low-density zones.
 5. Irregular nonmanifold/degenerate geometry to assess error diagnostics.
 
-For each *valid* corpus asset, compare the identical source mesh and target quad count. Record Exoside version, host, guide configuration, materials, adaptive sizing, actual output quad count and machine specs. GuidedQuad must reach actual quad output before numeric comparisons become meaningful.
+For each *valid* corpus asset, compare the identical source mesh and target quad count. Record Exoside version, host, guide configuration, materials, adaptive sizing, actual output quad count and machine specs. GuidedQuad already generates single four-sided constrained patches, but must reach full automatic quad output on the same assets before global retopology comparisons become meaningful.
 
 ## Metrics and priorities
 
@@ -25,4 +25,4 @@ For each *valid* corpus asset, compare the identical source mesh and target quad
 - **Geometry:** source/retopo distance, aspect ratio, minimum/maximum interior quad angle.
 - **Performance:** wall time, peak RAM and reproducibility at identical settings.
 
-No benchmarks, speedups or quality wins are claimed in V0.2.
+No quality or speed superiority over Exoside is claimed. Existing V0.3.x internal synthetic collision timings are not Exoside comparisons.
