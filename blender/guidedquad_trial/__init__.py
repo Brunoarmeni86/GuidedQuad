@@ -15,13 +15,16 @@ import tempfile
 import time
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
+from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 from mathutils.geometry import interpolate_bezier
 
 from .trial_core import (
     TrialError, SCHEMA_VERSION, orient_boundaries, parse_metrics,
     parse_quad_obj, quad_mesh_quality, save_report, write_guide,
 )
+from .ink_guides import InkGuideError, extract_ink_strokes, select_ink_sides
 
 
 def _is_type(object_type):
@@ -36,6 +39,31 @@ class GQ_TrialSettings(bpy.types.PropertyGroup):
     right: PointerProperty(name="Right Guide", type=bpy.types.Object, poll=_is_type("CURVE"))
     top: PointerProperty(name="Top Guide", type=bpy.types.Object, poll=_is_type("CURVE"))
     left: PointerProperty(name="Left Guide", type=bpy.types.Object, poll=_is_type("CURVE"))
+    guide_source: EnumProperty(
+        name="Guide Source",
+        items=[
+            ("CURVES", "Curve objects", "Four existing Curve objects", "CURVE_DATA", 0),
+            ("GREASE", "Grease Pencil", "Four strokes from one Grease Pencil object", "GREASEPENCIL", 1),
+            ("ANNOTATION", "Notes / Annotations", "Four viewport Annotation strokes", "GREASEPENCIL", 2),
+        ], default="CURVES",
+    )
+    ink_object: PointerProperty(
+        name="Grease Pencil Object", type=bpy.types.Object,
+        poll=lambda _self, obj: obj is not None and obj.type in {"GREASEPENCIL", "GPENCIL"},
+    )
+    ink_bottom: IntProperty(name="Bottom stroke", min=0, max=9999, default=0)
+    ink_right: IntProperty(name="Right stroke", min=0, max=9999, default=1)
+    ink_top: IntProperty(name="Top stroke", min=0, max=9999, default=2)
+    ink_left: IntProperty(name="Left stroke", min=0, max=9999, default=3)
+    snap_ink_to_surface: BoolProperty(
+        name="Snap strokes to source", default=False,
+        description="Nearest point on reference mesh; may pick wrong fold on closely spaced geometry",
+    )
+    snap_max_fraction: FloatProperty(
+        name="Maximum snap distance",
+        description="Maximum allowed distance as fraction of reference bounds diagonal",
+        default=0.05, min=0.0001, max=0.5, precision=4,
+    )
     executable: StringProperty(
         name="Native Engine", description="Path to guidedquad_cli or guidedquad_cli.exe",
         subtype="FILE_PATH",
@@ -94,6 +122,90 @@ def _curve_samples(obj, bezier_resolution):
             raise TrialError("Nonfinite guide coordinates")
         result.append(triple)
     return result
+
+
+
+def _read_ink_guides(context, settings, report):
+    annotation = settings.guide_source == "ANNOTATION"
+    if annotation:
+        data = getattr(context, "annotation_data", None)
+        if data is None:
+            data = getattr(context.scene, "grease_pencil", None)
+        if data is None:
+            raise TrialError("No 3D View Annotation data; draw four notes first")
+        matrix = None   # Annotation stroke coordinates are already in 3D view/world space.
+    else:
+        obj = settings.ink_object
+        if obj is None or obj.type not in {"GREASEPENCIL", "GPENCIL"}:
+            raise TrialError("Choose one Grease Pencil object")
+        data = obj.data
+        matrix = obj.matrix_world
+    try:
+        strokes = extract_ink_strokes(data, context.scene.frame_current,
+                                     is_annotation=annotation or
+                                     getattr(settings.ink_object, "type", None) == "GPENCIL")
+        indices = (settings.ink_bottom, settings.ink_right,
+                   settings.ink_top, settings.ink_left)
+        chosen = select_ink_sides(strokes, indices)
+    except InkGuideError as exc:
+        raise TrialError(str(exc)) from exc
+    if matrix is not None:
+        chosen = [[tuple(matrix @ Vector(p)) for p in points] for points in chosen]
+    report["ink"] = {
+        "source_type": settings.guide_source,
+        "available_strokes": len(strokes),
+        "selected_stroke_indices": list(indices),
+        "selected_point_counts": [len(side) for side in chosen],
+        "selected_frames": [strokes[i]["frame"] for i in indices],
+    }
+    if settings.snap_ink_to_surface:
+        chosen, snap_stats = _snap_ink_guides(context, settings, chosen)
+        report["ink"]["snap"] = snap_stats
+    return chosen
+
+
+def _snap_ink_guides(context, settings, sides):
+    source = settings.source
+    if source is None or source.type != "MESH":
+        raise TrialError("Choose a reference mesh before snapping ink guides")
+    depsgraph = context.evaluated_depsgraph_get()
+    evaluated = source.evaluated_get(depsgraph)
+    bvh = BVHTree.FromObject(evaluated, depsgraph)
+    matrix = evaluated.matrix_world
+    local_from_world = matrix.inverted_safe()
+    corners = [matrix @ Vector(c) for c in source.bound_box]
+    bounds_diag = (Vector(tuple(max(c[k] for c in corners) for k in range(3))) -
+                   Vector(tuple(min(c[k] for c in corners) for k in range(3)))).length
+    if bounds_diag <= 0 or not math.isfinite(bounds_diag):
+        raise TrialError("Reference mesh has degenerate bounds")
+    maximum = settings.snap_max_fraction * bounds_diag
+    result = []
+    peak = 0.0
+    count = 0
+    for side in sides:
+        projected = []
+        for world_xyz in side:
+            local = local_from_world @ Vector(world_xyz)
+            nearest = bvh.find_nearest(local)
+            if nearest is None or nearest[0] is None:
+                raise TrialError("Could not snap ink stroke to the reference mesh")
+            world_hit = matrix @ nearest[0]
+            d = (Vector(world_xyz) - world_hit).length
+            if d > maximum:
+                raise TrialError(
+                    f"Ink stroke too far from surface ({d:.5g} > {maximum:.5g} Blender units)"
+                )
+            peak = max(peak, d)
+            count += 1
+            projected.append(tuple(world_hit))
+        result.append(projected)
+    return result, {
+        "method": "nearest_source_surface",
+        "points": count,
+        "maximum_displacement": peak,
+        "limit": maximum,
+        "warning": "nearest-point projection can jump across close folds",
+    }
 
 
 def _write_source_obj(obj, depsgraph, path):
@@ -223,7 +335,7 @@ class GQ_OT_run_trial(bpy.types.Operator):
             "schema": SCHEMA_VERSION,
             "time_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "status": "failed",
-            "addon_version": "0.3.9-trial",
+            "addon_version": "0.3.10-trial",
             "blender_version": bpy.app.version_string,
             "platform": platform.system(),
             "parameters": {
@@ -234,6 +346,9 @@ class GQ_OT_run_trial(bpy.types.Operator):
                 "bezier_resolution": settings.bezier_resolution,
                 "corner_tolerance": settings.corner_tolerance,
                 "verify_collision": settings.verify_collision,
+                "guide_source": settings.guide_source,
+                "snap_ink_to_surface": settings.snap_ink_to_surface,
+                "snap_max_fraction": settings.snap_max_fraction,
             },
             "metric_units": {"duration": "ms", "geometry": "world Blender units"},
         }
@@ -247,12 +362,15 @@ class GQ_OT_run_trial(bpy.types.Operator):
                 raise TrialError("Native guidedquad_cli file not found")
             if not settings.source or settings.source.type != "MESH":
                 raise TrialError("Select a reference mesh object")
-            guides = (settings.bottom, settings.right, settings.top, settings.left)
-            if any(obj is None for obj in guides) or len(set(obj.as_pointer() for obj in guides)) != 4:
-                raise TrialError("Assign four DIFFERENT open CURVE objects (Bottom / Right / Top / Left)")
+            if settings.guide_source == "CURVES":
+                guides = (settings.bottom, settings.right, settings.top, settings.left)
+                if any(obj is None for obj in guides) or len(set(obj.as_pointer() for obj in guides)) != 4:
+                    raise TrialError("Assign four DIFFERENT open CURVE objects (Bottom / Right / Top / Left)")
+                polylines = [_curve_samples(curve, settings.bezier_resolution) for curve in guides]
+            else:
+                polylines = _read_ink_guides(context, settings, report)
             boundary, gap, diagonal = orient_boundaries(
-                [_curve_samples(curve, settings.bezier_resolution) for curve in guides],
-                settings.corner_tolerance,
+                polylines, settings.corner_tolerance,
             )
             report["guide"] = {
                 "maximum_original_corner_gap": gap,
@@ -376,9 +494,23 @@ class GQ_PT_trial_panel(bpy.types.Panel):
         col.label(text="Reference / Four-Sided Patch")
         col.operator("guidedquad.create_demo", icon="MESH_GRID")
         col.prop(props, "source")
-        for name in ("bottom", "right", "top", "left"):
-            col.prop(props, name)
-        col.label(text="Open POLY or BEZIER curves")
+        col.prop(props, "guide_source")
+        if props.guide_source == "CURVES":
+            for name in ("bottom", "right", "top", "left"):
+                col.prop(props, name)
+            col.label(text="Open POLY or BEZIER curves")
+        else:
+            if props.guide_source == "GREASE":
+                col.prop(props, "ink_object")
+            else:
+                col.label(text="Current viewport Annotation layers")
+            col.label(text="Strokes ordered by visible layer and frame")
+            for name in ("ink_bottom", "ink_right", "ink_top", "ink_left"):
+                col.prop(props, name)
+            col.prop(props, "snap_ink_to_surface")
+            if props.snap_ink_to_surface:
+                col.prop(props, "snap_max_fraction")
+            col.label(text="Strokes convert automatically at generation")
         col.separator()
         row = col.row(align=True)
         row.prop(props, "u_segments")
