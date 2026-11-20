@@ -12,7 +12,7 @@ Analyze public documentation and observable **inputs and outputs** of a legally 
 4. Joint/bent limb with paint-based high- and low-density zones.
 5. Irregular nonmanifold/degenerate geometry to assess error diagnostics.
 
-For each *valid* corpus asset, compare the identical source mesh and target quad count. Record Exoside version, host, guide configuration, materials, adaptive sizing, actual output quad count and machine specs. GuidedQuad already generates single four-sided constrained patches, but must reach full automatic quad output on the same assets before global retopology comparisons become meaningful.
+For each *valid* corpus asset, compare the identical source mesh and target quad count. Record Exoside version, host, guide configuration, materials, adaptive sizing, actual output quad count and machine specs. As of 20 Nov 2026 Exoside documents engine 1.4.3 (released 15 Oct 2026); do not treat the previously inspected 1.2 DLL as the current benchmark engine. Official changelog: https://exoside.com/quadremesher/quadremesher-troubleshooting/ . GuidedQuad already generates single four-sided constrained patches, but must reach full automatic quad output on the same assets before global retopology comparisons become meaningful.
 
 ## Metrics and priorities
 
