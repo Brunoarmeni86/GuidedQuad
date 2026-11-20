@@ -184,7 +184,7 @@ def _safe_console_text(message):
     # numeric diagnostics; redact the most common absolute path forms.
     message = message.replace(str(Path.home()), "<HOME>")
     message = re.sub(
-        r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|/(?:tmp|home|Users|mnt|var)/)[^\\s\\\"']+",
+        r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|/(?:tmp|home|Users|mnt|var)/)[^\s\"']+",
         "<local-path>", message)
     return message[-2500:]
 
