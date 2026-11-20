@@ -4,6 +4,7 @@
 #include "guidedquad/patch_solver.hpp"
 #include "guidedquad/surface_projection.hpp"
 #include <cstdlib>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <limits>
@@ -86,6 +87,35 @@ static guidedquad::QuadPatchMesh read_quad_obj(const std::string &name) {
   return mesh;
 }
 
+// Deliberately tiny text interchange format: four ordered boundary polylines.
+// Avoids pulling a JSON library into the dependency-free native CLI.
+static guidedquad::QuadPatchBoundary read_guided_boundary(const std::string &name) {
+  std::ifstream in(name);
+  if(!in)throw std::runtime_error("cannot open guide boundary file");
+  guidedquad::QuadPatchBoundary b;
+  const char *names[]={"bottom","right","top","left"};
+  std::vector<guidedquad::Vec3> *sides[]={&b.bottom,&b.right,&b.top,&b.left};
+  for(int side=0;side<4;++side) {
+    std::string key;
+    unsigned long long count=0;
+    if(!(in>>key>>count)||key!=names[side]||count<2||count>1000000ULL)
+      throw std::invalid_argument("guide needs ordered bottom/right/top/left headers and valid counts");
+    auto &points=*sides[side];
+    points.reserve(static_cast<std::size_t>(count));
+    for(unsigned long long k=0;k<count;++k) {
+      guidedquad::Vec3 p;
+      if(!(in>>p.x>>p.y>>p.z)||
+         !std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z))
+        throw std::invalid_argument("guide has missing or nonfinite point");
+      points.push_back(p);
+    }
+  }
+  std::string extra;
+  if(in>>extra)throw std::invalid_argument("guide has unexpected trailing data");
+  if(!in.eof())throw std::invalid_argument("guide cannot be fully read");
+  return b;
+}
+
 template<typename T>
 static std::vector<T> read_values(const std::string &name) {
   std::ifstream file(name);
@@ -146,13 +176,64 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: guidedquad_cli facesets input.obj face_ids.txt output.obj\n"
               << "       guidedquad_cli contours input.obj scalar_per_vertex.txt output.obj [threshold]\n"
               << "       guidedquad_cli patch-loop input.obj output.obj c0 c1 c2 c3 nu nv\n"
-              << "       guidedquad_cli check-quads quad_mesh.obj\n"
+              << "       guidedquad_cli check-quads quad_mesh.obj\n"              << "       guidedquad_cli guided-patch guide.txt source.obj output.obj nu nv [iterations] [strength] [normal_dot] [max_distance]\n"
               << "       guidedquad_cli project-loop border.obj reference.obj output.obj c0 c1 c2 c3 nu nv [iterations] [strength] [normal_dot] [max_distance] [component_id]\n"
               << "Patch corners are four ordered indices in the extracted closed boundary path.\n";
     return 2;
   }
   try {
     const std::string mode(argv[1]);
+    if(mode=="guided-patch") {
+      if(argc<7||argc>11)
+        throw std::invalid_argument("guided-patch needs guide source output nu nv and optional projection settings");
+      const auto boundary=read_guided_boundary(argv[2]);
+      guidedquad::QuadPatchOptions options;
+      options.u_segments=parse_u32(argv[5]);
+      options.v_segments=parse_u32(argv[6]);
+      const auto result=guidedquad::solve_quad_patch(boundary,options);
+      std::uint32_t iterations=2;
+      if(argc>=8)iterations=parse_u32(argv[7]);
+      guidedquad::SurfaceProjectionOptions projection;
+      projection.iterations=iterations;
+      const auto numeric_arg=[&](int i,const char *label){
+        std::size_t n=0;
+        const std::string raw=argv[i];
+        const double value=std::stod(raw,&n);
+        if(n!=raw.size()||!std::isfinite(value))
+          throw std::invalid_argument(std::string("invalid ")+label);
+        return value;
+      };
+      if(argc>=9)projection.strength=numeric_arg(8,"strength");
+      if(argc>=10)projection.min_reference_normal_dot=numeric_arg(9,"normal_dot");
+      if(argc>=11)projection.max_projection_distance=numeric_arg(10,"max_distance");
+      guidedquad::QuadPatchMesh output=result.mesh;
+      guidedquad::SurfaceProjectionStats stats;
+      if(iterations>0) {
+        const auto reference=read_obj(argv[3]);
+        const auto projected=guidedquad::project_quad_patch_to_surface(
+            reference,output,options.u_segments,options.v_segments,projection);
+        output=projected.mesh;
+        stats=projected.stats;
+      }
+      write_quads(output,argv[4]);
+      std::cout<<std::setprecision(17)
+          <<"GQ_METRICS"
+          <<" vertices="<<output.vertices.size()
+          <<" quads="<<output.quads.size()
+          <<" guide_error="<<result.quality.max_boundary_error
+          <<" initial_aspect="<<result.quality.worst_edge_aspect_ratio
+          <<" initial_jacobian="<<result.quality.minimum_scaled_jacobian
+          <<" initial_warpage="<<result.quality.max_diagonal_warpage_deg
+          <<" projection_initial_rms="<<stats.initial_rms_distance
+          <<" projection_final_rms="<<stats.final_rms_distance
+          <<" collision_bvh_builds="<<stats.collision_bvh_builds
+          <<" collision_bvh_refits="<<stats.collision_bvh_refits
+          <<" collision_dirty_passes="<<stats.collision_dirty_passes
+          <<" collision_dirty_face_queries="<<stats.collision_dirty_face_queries
+          <<" accepted_iterations="<<stats.accepted_iterations
+          <<'\n';
+      return 0;
+    }
     if(mode=="check-quads") {
       if(argc!=3)throw std::invalid_argument("check-quads takes exactly one quad OBJ");
       const auto report=guidedquad::find_quad_self_intersections(read_quad_obj(argv[2]),16);
