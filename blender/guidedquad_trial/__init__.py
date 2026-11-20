@@ -155,6 +155,58 @@ def _report_stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
+class GQ_OT_create_demo(bpy.types.Operator):
+    bl_idname = "guidedquad.create_demo"
+    bl_label = "Create Demo Patch"
+    bl_description = "Create a small curved source mesh and four open reference guides"
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT" and context.scene is not None
+
+    def execute(self, context):
+        settings = context.scene.guidedquad_trial
+        segments = 16
+        coords = []
+        quads = []
+        for j in range(segments + 1):
+            y = j / segments
+            for i in range(segments + 1):
+                x = i / segments
+                coords.append((x, y, 0.12 * math.sin(math.pi * x) * math.sin(math.pi * y)))
+        for j in range(segments):
+            for i in range(segments):
+                a = j * (segments + 1) + i
+                quads.append((a, a + 1, a + segments + 2, a + segments + 1))
+        mesh = bpy.data.meshes.new("GuidedQuad_Demo_Reference")
+        mesh.from_pydata(coords, [], quads)
+        mesh.update()
+        source = bpy.data.objects.new("GuidedQuad_Demo_Reference", mesh)
+        context.scene.collection.objects.link(source)
+        settings.source = source
+
+        def make_curve(name, points):
+            curve = bpy.data.curves.new("GuidedQuad_" + name, type="CURVE")
+            curve.dimensions = "3D"
+            spline = curve.splines.new("POLY")
+            spline.points.add(len(points) - 1)
+            for sample, point in zip(spline.points, points):
+                sample.co = (*point, 1.0)
+            obj = bpy.data.objects.new("GuidedQuad_" + name, curve)
+            context.scene.collection.objects.link(obj)
+            return obj
+
+        settings.bottom = make_curve("Bottom", [(0, 0, 0), (1, 0, 0)])
+        settings.right = make_curve("Right", [(1, 0, 0), (1, 1, 0)])
+        settings.top = make_curve("Top", [(0, 1, 0), (1, 1, 0)])
+        settings.left = make_curve("Left", [(0, 0, 0), (0, 1, 0)])
+        settings.u_segments = 16
+        settings.v_segments = 16
+        settings.projection_iterations = 2
+        self.report({"INFO"}, "Demo mesh and four guide curves created")
+        return {"FINISHED"}
+
+
 class GQ_OT_run_trial(bpy.types.Operator):
     bl_idname = "guidedquad.run_trial"
     bl_label = "Generate GuidedQuad Trial"
@@ -314,6 +366,7 @@ class GQ_PT_trial_panel(bpy.types.Panel):
         col.prop(props, "executable", text="")
         col.separator()
         col.label(text="Reference / Four-Sided Patch")
+        col.operator("guidedquad.create_demo", icon="MESH_GRID")
         col.prop(props, "source")
         for name in ("bottom", "right", "top", "left"):
             col.prop(props, name)
@@ -348,7 +401,7 @@ class GQ_PT_trial_panel(bpy.types.Panel):
 
 
 CLASSES = (
-    GQ_TrialSettings, GQ_OT_run_trial, GQ_OT_export_report, GQ_PT_trial_panel,
+    GQ_TrialSettings, GQ_OT_create_demo, GQ_OT_run_trial, GQ_OT_export_report, GQ_PT_trial_panel,
 )
 
 
