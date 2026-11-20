@@ -21,6 +21,12 @@ In standard Blender 4.2+ choose **Edit → Preferences → Get Extensions → In
 
 Specify the **Native Engine** executable using the folder/file control. The Python extension itself requires no Blender rebuild, but **quad generation will not work without the matching compiled C++ executable**.
 
+## First-run smoke test (recommended)
+
+After installing the extension and pointing **Native Engine** to the downloaded `guidedquad_cli.exe`, open the **GuidedQuad** N-panel in Object Mode and click **Create Demo Patch**. The add-on creates a small curved 16×16 reference surface and **four preassigned POLY curves** with matching corners. Then click **Generate GuidedQuad Trial**. A second all-quad object should appear with its interior projected toward the curved reference surface. Finally check **Report Folder** for a new JSON report. This is the quickest way to confirm Blender version compatibility, native execution, output import, and tracker saving together.
+
+If the operation fails, the JSON will still include `status: "failed"` and a brief error. Keep that report for troubleshooting.
+
 ## Quick test — Blender object mode
 
 1. Prepare a **reference mesh** with a local area that you want to approximate. Use a sculpt, subdivided model, or small test mesh. The mesh can contain n-gons; the addon exports its **evaluated triangulation**. The source object is not modified.
