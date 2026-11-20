@@ -97,13 +97,23 @@ static void measure_case(std::uint32_t n,int frames,bool broad) {
   double full_ms=0,local_ms=0;
   std::uint64_t full_nodes=0,local_nodes=0,updated_box_nodes=0;
   std::uint64_t total_faces=0;
+  auto previously_accepted=source.vertices;
   for(int i=0;i<frames;++i) {
     const auto sample=brush_frame(source,n,i,0.07,broad);
+    // A moving brush can release vertices altered in the previous frame:
+    // these returned-to-baseline vertices MUST be in the dirty change set.
+    std::vector<std::uint32_t> actual_changes;
+    for(std::size_t k=0;k<sample.positions.size();++k) {
+      const auto &p=sample.positions[k],&q=previously_accepted[k];
+      if(p.x!=q.x || p.y!=q.y || p.z!=q.z)
+        actual_changes.push_back(static_cast<std::uint32_t>(k));
+    }
     reference.vertices=sample.positions;
     const auto full_start=Clock::now();
     const auto f=full.check_positions(sample.positions,1);
     const auto mid=Clock::now();
-    const auto d=local.check_positions_dirty(sample.positions,sample.changed,1);
+    const auto d=local.check_positions_dirty(sample.positions,actual_changes,1);
+    if(d.pairs.empty())previously_accepted=sample.positions;
     const auto done=Clock::now();
     full_ms+=std::chrono::duration<double,std::milli>(mid-full_start).count();
     local_ms+=std::chrono::duration<double,std::milli>(done-mid).count();
