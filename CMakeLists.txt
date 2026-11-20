@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(GuidedQuad VERSION 0.1.0 LANGUAGES CXX)
+project(GuidedQuad VERSION 0.2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-add_library(guidedquad_core src/guide_graph.cpp)
+add_library(guidedquad_core src/guide_graph.cpp src/cross_field.cpp)
 target_include_directories(guidedquad_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(MSVC)
   target_compile_options(guidedquad_core PRIVATE /W4)
@@ -17,4 +17,12 @@ if(BUILD_TESTING)
   add_executable(guidedquad_tests tests/test_guides.cpp)
   target_link_libraries(guidedquad_tests PRIVATE guidedquad_core)
   add_test(NAME guidedquad_guides COMMAND guidedquad_tests)
+  add_executable(guidedquad_cross_field_tests tests/test_cross_field.cpp)
+  target_link_libraries(guidedquad_cross_field_tests PRIVATE guidedquad_core)
+  add_test(NAME guidedquad_cross_field COMMAND guidedquad_cross_field_tests)
+  add_test(NAME guidedquad_cli_flow
+    COMMAND guidedquad_cli flow
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/square.obj
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/square_flow.txt
+      ${CMAKE_CURRENT_BINARY_DIR}/preview_flow.obj)
 endif()
