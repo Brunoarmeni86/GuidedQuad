@@ -20,7 +20,7 @@ from mathutils.geometry import interpolate_bezier
 
 from .trial_core import (
     TrialError, SCHEMA_VERSION, orient_boundaries, parse_metrics,
-    parse_quad_obj, save_report, write_guide,
+    parse_quad_obj, quad_mesh_quality, save_report, write_guide,
 )
 
 
@@ -295,6 +295,7 @@ class GQ_OT_run_trial(bpy.types.Operator):
                 metrics = parse_metrics(proc.stdout)
                 report["engine_metrics"] = metrics
                 vertices, quads = parse_quad_obj(output_path)
+                report["output_quality"] = quad_mesh_quality(vertices, quads)
                 if settings.verify_collision:
                     collision = subprocess.run(
                         [str(executable), "check-quads", output_path],
