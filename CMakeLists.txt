@@ -35,6 +35,9 @@ if(BUILD_TESTING)
   add_executable(guidedquad_dirty_tests tests/test_dirty_collision.cpp)
   target_link_libraries(guidedquad_dirty_tests PRIVATE guidedquad_core)
   add_test(NAME guidedquad_dirty COMMAND guidedquad_dirty_tests)
+  add_executable(guidedquad_organic_tests tests/test_organic_sculpt.cpp)
+  target_link_libraries(guidedquad_organic_tests PRIVATE guidedquad_core)
+  add_test(NAME guidedquad_organic COMMAND guidedquad_organic_tests)
   add_test(NAME guidedquad_collision_cli_clean COMMAND guidedquad_cli
     check-quads ${CMAKE_CURRENT_SOURCE_DIR}/tests/separated_quads.obj)
   add_test(NAME guidedquad_collision_cli_crossing COMMAND guidedquad_cli
