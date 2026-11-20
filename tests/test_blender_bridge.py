@@ -70,6 +70,13 @@ class BlenderAdapterSmokeTest(unittest.TestCase):
         self.assertIn("guidedquad-cli-smoke", process["stdout"])
         self.assertGreaterEqual(process["elapsed_ms"], 0)
 
+    def test_console_redacts_local_paths(self):
+        raw = "Could not open /tmp/private_dataset/subject.obj at C:\\\\Users\\\\Private\\\\asset.obj"
+        sanitized = self.addon._safe_console_text(raw)
+        self.assertNotIn("/tmp/private_dataset", sanitized)
+        self.assertNotIn("subject.obj", sanitized)
+        self.assertIn("<local-path>", sanitized)
+
     def test_report_defaults_do_not_include_object_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             poly = types.SimpleNamespace(vertices=(0, 1, 2, 3))
