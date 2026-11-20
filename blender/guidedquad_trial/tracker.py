@@ -64,15 +64,23 @@ def export_bundle(directory, max_reports=MAX_REPORTS_IN_ARCHIVE):
     archive = folder / ("guidedquad_feedback_" +
                         _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S") +
                         "_" + uuid.uuid4().hex[:6] + ".zip")
+    included = 0
     with zipfile.ZipFile(archive, mode="x", compression=zipfile.ZIP_DEFLATED) as z:
         z.writestr("README.txt", README)
         for p in reversed(candidates):
-            if p.stat().st_size > MAX_REPORT_BYTES:
+            try:
+                if p.stat().st_size > MAX_REPORT_BYTES:
+                    continue
+                # A partial/corrupt local report must never block export.
+                with p.open("r", encoding="utf-8") as f:
+                    report = json.load(f)
+            except (OSError, UnicodeError, ValueError):
                 continue
-            # Validate that the payload really is JSON before adding it.
-            with p.open("r", encoding="utf-8") as f:
-                report = json.load(f)
             if not isinstance(report, dict) or report.get("schema") != SCHEMA:
                 continue
             z.write(p, arcname=p.name)
+            included += 1
+    if not included:
+        archive.unlink(missing_ok=True)
+        raise ValueError("no valid GuidedQuad JSON reports found")
     return archive
