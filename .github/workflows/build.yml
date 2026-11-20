@@ -24,6 +24,22 @@ jobs:
         run: cmake --build build --config ${{ matrix.build_type }} --parallel
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+      - name: Package GuidedQuad trial native CLI (Windows)
+        if: matrix.os == 'windows-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guidedquad-trial-cli-windows-x64
+          path: build/Release/guidedquad_cli.exe
+          if-no-files-found: error
+          retention-days: 30
+      - name: Package GuidedQuad trial native CLI (Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guidedquad-trial-cli-linux-x64
+          path: build/guidedquad_cli
+          if-no-files-found: error
+          retention-days: 30
       - name: Validate Blender addon Python
         run: python -m compileall -q blender/guidedquad_trial
       - name: Test addon tracker and guide interchange
