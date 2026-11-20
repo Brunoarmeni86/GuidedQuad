@@ -35,6 +35,14 @@ if(BUILD_TESTING)
   add_executable(guidedquad_dirty_tests tests/test_dirty_collision.cpp)
   target_link_libraries(guidedquad_dirty_tests PRIVATE guidedquad_core)
   add_test(NAME guidedquad_dirty COMMAND guidedquad_dirty_tests)
+  add_test(NAME guidedquad_guided_patch_cli COMMAND guidedquad_cli
+    guided-patch ${CMAKE_CURRENT_SOURCE_DIR}/tests/guide_square.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/curved_surface.obj
+    ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_trial_patch.obj 8 8 2 1)
+  add_test(NAME guidedquad_guided_patch_unprojected_cli COMMAND guidedquad_cli
+    guided-patch ${CMAKE_CURRENT_SOURCE_DIR}/tests/guide_square.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/curved_surface.obj
+    ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_trial_unprojected.obj 8 8 0)
   add_test(NAME guidedquad_collision_cli_clean COMMAND guidedquad_cli
     check-quads ${CMAKE_CURRENT_SOURCE_DIR}/tests/separated_quads.obj)
   add_test(NAME guidedquad_collision_cli_crossing COMMAND guidedquad_cli
