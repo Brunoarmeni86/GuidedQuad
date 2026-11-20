@@ -46,6 +46,9 @@ jobs:
       - name: Dirty-face collision BVH benchmark
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         run: ctest --test-dir build -C Release -V -R "^guidedquad_dirty$"
+      - name: Curved organic procedural regression benchmarks
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: ctest --test-dir build -C Release -V -R "^guidedquad_organic$"
 
   trial-addon:
     name: Trial addon Python validation and ZIP packaging
