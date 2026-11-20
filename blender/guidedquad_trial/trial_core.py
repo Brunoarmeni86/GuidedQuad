@@ -126,6 +126,56 @@ def parse_quad_obj(path, max_vertices=10_000_000, max_faces=10_000_000):
     return vertices, quads
 
 
+
+def quad_mesh_quality(vertices, quads):
+    """Cheap post-projection shape diagnostics, without claiming UV quality.
+
+    Face area is computed from the existing (0, 2) quad diagonal. Warpage
+    compares the two triangular halves. The percentiles refer to face-wise
+    longest/shortest boundary edge length, not subdivision density.
+    """
+    def sub(a, b):
+        return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0])
+
+    aspect_ratios = []
+    min_area = float("inf")
+    max_warpage = 0.0
+    degenerate = 0
+    for face in quads:
+        pts = [vertices[index] for index in face]
+        edges = [math.dist(pts[i], pts[(i + 1) % 4]) for i in range(4)]
+        shortest = min(edges)
+        if shortest <= 0:
+            degenerate += 1
+            continue
+        aspect_ratios.append(max(edges) / shortest)
+        a = cross(sub(pts[1], pts[0]), sub(pts[2], pts[0]))
+        b = cross(sub(pts[2], pts[0]), sub(pts[3], pts[0]))
+        area_a, area_b = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(x * x for x in b))
+        area = 0.5 * (area_a + area_b)
+        min_area = min(min_area, area)
+        if area_a <= 0 or area_b <= 0:
+            degenerate += 1
+            continue
+        cosine = max(-1.0, min(1.0, sum(a[i] * b[i] for i in range(3)) / (area_a * area_b)))
+        max_warpage = max(max_warpage, math.degrees(math.acos(cosine)))
+    aspect_ratios.sort()
+    count = len(aspect_ratios)
+    return {
+        "quads_measured": len(quads),
+        "degenerate_quads": degenerate,
+        "worst_edge_aspect_ratio": max(aspect_ratios) if count else None,
+        "p95_edge_aspect_ratio": aspect_ratios[min(count - 1, int(0.95 * count))]
+                                 if count else None,
+        "minimum_face_area": min_area if math.isfinite(min_area) else None,
+        "maximum_diagonal_warpage_degrees": max_warpage,
+    }
+
 def parse_metrics(output):
     for line in output.splitlines():
         if line.startswith("GQ_METRICS "):
