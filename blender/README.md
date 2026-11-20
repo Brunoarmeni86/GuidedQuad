@@ -1,4 +1,4 @@
-# GuidedQuad Blender Trial + Tracker — experimental V0.3.9
+# GuidedQuad Blender Trial + Tracker — experimental V0.3.10
 
 An **installable Blender 4.2+ Extension** for testing the independent GuidedQuad C++ core. It is **not** an automatic all-over quad remesher and **does not depend on** Blender Sculpt Extended.
 
@@ -6,18 +6,18 @@ The add-on generates **one guided four-sided all-quad patch** from four open cur
 
 ## Get the trial builds
 
-Go to [GuidedQuad GitHub Actions](https://github.com/Brunoarmeni86/GuidedQuad/actions) and open the latest successful **GuidedQuad C++ tests** run for branch `feature/blender-trial-tracker-v039-20261120`.
+Go to [GuidedQuad GitHub Actions](https://github.com/Brunoarmeni86/GuidedQuad/actions) and open the latest successful **GuidedQuad C++ tests** run for branch `feature/grease-pencil-annotation-guides-v0310`.
 
 Download from the run's **Artifacts** section:
 
-1. `guidedquad-blender-trial-v039`: outer GitHub artifact archive containing `guidedquad_trial_v0.3.9.zip`. **Extract the outer artifact**, but **keep** the nested `guidedquad_trial_v0.3.9.zip` intact for installation.
+1. `guidedquad-blender-trial-v0310`: outer GitHub artifact archive containing `guidedquad_trial_v0.3.10.zip`. **Extract the outer artifact**, but **keep** the nested `guidedquad_trial_v0.3.10.zip` intact for installation.
 2. `guidedquad-cli-windows-latest` if on Windows; choose the Linux/macOS artifact on those systems. Extract `guidedquad_cli.exe` (Windows) or `guidedquad_cli` (macOS/Linux) to a durable folder. On Unix, mark the executable as executable if needed (`chmod +x guidedquad_cli`).
 
 Alternatively build the current C++ source using CMake as detailed in the root README and run `python scripts/package_blender_trial.py` to create the installable add-on zip.
 
 ## Installation
 
-In standard Blender 4.2+ choose **Edit → Preferences → Get Extensions → Install from Disk** (wording may vary by version) and select the inner `guidedquad_trial_v0.3.9.zip`. Confirm and enable **GuidedQuad Trial + Tracker**. It appears in the viewport **N-panel → GuidedQuad** tab.
+In standard Blender 4.2+ choose **Edit → Preferences → Get Extensions → Install from Disk** (wording may vary by version) and select the inner `guidedquad_trial_v0.3.10.zip`. Confirm and enable **GuidedQuad Trial + Tracker**. It appears in the viewport **N-panel → GuidedQuad** tab.
 
 Specify the **Native Engine** executable using the folder/file control. The Python extension itself requires no Blender rebuild, but **quad generation will not work without the matching compiled C++ executable**.
 
@@ -26,6 +26,22 @@ Specify the **Native Engine** executable using the folder/file control. The Pyth
 After installing the extension and pointing **Native Engine** to the downloaded `guidedquad_cli.exe`, open the **GuidedQuad** N-panel in Object Mode and click **Create Demo Patch**. The add-on creates a small curved 16×16 reference surface and **four preassigned POLY curves** with matching corners. Then click **Generate GuidedQuad Trial**. A second all-quad object should appear with its interior projected toward the curved reference surface. Finally check **Report Folder** for a new JSON report. This is the quickest way to confirm Blender version compatibility, native execution, output import, and tracker saving together.
 
 If the operation fails, the JSON will still include `status: "failed"` and a brief error. Keep that report for troubleshooting.
+
+## New: Grease Pencil and Annotations as temporary guides (0.3.10)
+
+Use **Guide Source → Grease Pencil** to read strokes from one Grease Pencil object, or **Guide Source → Notes / Annotations** to read viewport annotation strokes. The four stroke index fields are **zero-based** and map to Bottom, Right, Top and Left. The addon automatically fixes the direction of each chosen stroke so you do not need to draw in a particular direction. Assign four distinct strokes with endpoints at the desired corners; this is still a **single four-sided patch**, not an arbitrary line network solver.
+
+Workflow:
+1. Select the reference mesh. For Grease Pencil, use **Draw Mode → Stroke Placement → Surface / Project Onto Selected** where available and draw at least four separate open strokes in one object. For Notes, draw four separate Annotation strokes in the viewport.
+2. Return to **Object Mode**, set the Guide Source in the GuidedQuad panel, and choose the Grease Pencil object if applicable.
+3. Enter the zero-based stroke indices (0,1,2,3 if those are the first four usable strokes, in Bottom/Right/Top/Left order). Hidden layers, cyclic strokes, empty clicks and future keyframes are ignored. The addon reads the latest frame **not later** than the current timeline frame.
+4. Optionally enable **Snap strokes to source** and set Maximum snap distance as a fraction of the source object's bounding diagonal. The snap uses **nearest surface point**, not a camera-view ray; on deep folds, close parallel sheets or thin cavities it can project onto the wrong side. Turn it off for strokes already drawn onto the correct surface.
+5. Generate the patch. Stroke point data is converted directly into four in-memory polylines **only when the native engine needs the guides**. The original strokes remain untouched; no temporary Curve objects clutter the .blend.
+6. The tracker JSON records the source type, chosen stroke indices and frames, selected point counts, and optional maximum snap displacement. Native CLI logs and full source geometry are not uploaded.
+
+**Compatibility:** The reader handles GPv3's `frame.drawing.strokes` API (Blender 4.3+), legacy GP object frames (4.2), and Annotation `frame.strokes` through the context's annotation data. Blender changes its Grease Pencil API between releases; the pure-Python readers have unit tests, but the GP/Annotation UI path requires actual Blender testing. If the Annotation data is attached to another editor or not accessible from the active 3D viewport, the addon will report a missing source instead of silently guessing.
+
+**Current limitations:** This phase does not assign an unlimited number of ink lines to a directional flow field, support multi-patch automatic layout, or automatically cut intersection/junctions between sketches. These need a future 4-RoSy/patch network stage. The sampling of dense hand-drawn strokes creates hard boundary knots; set U/V segments large enough to retain them or reduce/simplify the strokes first.
 
 ## Quick test — Blender object mode
 
