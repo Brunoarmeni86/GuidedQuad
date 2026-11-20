@@ -2,9 +2,9 @@
 
 **Independent, constraint-first quadrangulation engine — experimental V0.3 branch**
 
-GuidedQuad aims to produce precise, controllable all-quad retopology from artist-defined flow, hard boundaries and local density. The engine is designed to run independently of any custom Blender build. A stock Blender extension is planned, but **not yet implemented**.
+GuidedQuad aims to produce precise, controllable all-quad retopology from artist-defined flow, hard boundaries and local density. The C++ core is independent of any custom Blender build. This experimental branch includes a limited Blender trial addon with a local feedback tracker, not a full automatic retopology extension.
 
-> **Current status:** `main` is the V0.1 guide extractor. This experimental branch contains V0.2 constrained four-sided all-quad patches plus V0.3 guarded BVH surface reprojection. It is **not an automatic remesher** for arbitrary meshes; no installable Blender addon yet.
+> **Current status:** `main` is the V0.1 guide extractor. This experimental branch contains V0.2 constrained four-sided all-quad patches plus V0.3 guarded BVH surface reprojection. It is **not an automatic remesher** for arbitrary meshes. A separate diagnostic Blender addon alpha is now available in this experimental branch.
 
 ## What works now
 
@@ -43,6 +43,25 @@ The OBJ input must consist of triangle faces with positive indices. The Face Set
 
 Full [V0.3 projection algorithm, limits and benchmarks](docs/PROJECTION_V03.md). The four-sided patch solver is documented in [V0.2 solver notes](docs/SOLVER_V02.md).
 
+## First Blender trial and feedback tracker
+
+The experimental Python addon is in [blender/guidedquad_trial](blender/guidedquad_trial).
+It can validate quad collisions, extract sculpt Face Set guides and create a
+four-sided quad patch preview, optionally projected onto a reference surface.
+**It cannot yet automatically retopologize arbitrary organic meshes.**
+
+On a fully green branch CI run, download the GuidedQuad_Blender_Trial_addon
+artifact plus the matching Windows, macOS or Linux CLI artifact from the
+**same run**. See [Blender trial installation](blender/README.md) and
+[feedback test cases](blender/TRIAL_TEST_PLAN.md).
+
+The local tracker writes one JSON report per operation. Exporting the ZIP is
+manual: no uploaded data, scenes, OBJ geometry, textures or screenshots are
+included. Python syntax and mocked-Blender bridge tests run in CI; a genuine
+interactive Blender session has not yet been acceptance-tested.
+
+The engine also has procedural curved-mesh tests at 24, 48 and 72 segments,
+with multiscale bumps and local/broad deformations; these are **not scans**.
 ## Roadmap
 
 See [Issue #1 — GuidedQuad roadmap](https://github.com/Brunoarmeni86/GuidedQuad/issues/1) and [architecture](docs/ARCHITECTURE.md).

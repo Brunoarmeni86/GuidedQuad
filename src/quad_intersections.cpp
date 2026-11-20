@@ -212,10 +212,18 @@ bool bounds_touch_only_shared_feature(
 }
 
 bool point_in_triangle(Vec3 p,const Triangle &t,Vec3 n){
+  const double normal_length=std::hypot(n.x,n.y,n.z);
   for(int i=0;i<3;++i) {
     const Vec3 edge=sub(t.v[(i+1)%3],t.v[i]);
     const Vec3 ap=sub(p,t.v[i]);
-    if(dot(cross(edge,ap),n)<-1e-14)return false;
+    const double edge_length=std::hypot(edge.x,edge.y,edge.z);
+    const double p_length=std::hypot(ap.x,ap.y,ap.z);
+    // This dot has units of length^4. The former fixed -1e-14 cutoff
+    // implicitly scaled with the ENTIRE model and accepted points outside
+    // small curved triangles, producing false adjacent-collision witnesses.
+    const double err=32*std::numeric_limits<double>::epsilon()*
+                     edge_length*p_length*normal_length;
+    if(dot(cross(edge,ap),n)<-err)return false;
   }
   return true;
 }
