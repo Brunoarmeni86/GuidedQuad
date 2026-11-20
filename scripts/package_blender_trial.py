@@ -13,8 +13,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "blender" / "guidedquad_trial"
 DIST = ROOT / "dist"
-NAME = "guidedquad_trial_v0.3.9.zip"
-FILES = ("__init__.py", "trial_core.py", "blender_manifest.toml")
+NAME = "guidedquad_trial_v0.3.10.zip"
+FILES = ("__init__.py", "trial_core.py", "ink_guides.py", "blender_manifest.toml")
 
 
 def build():
