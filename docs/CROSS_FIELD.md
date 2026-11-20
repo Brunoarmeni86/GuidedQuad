@@ -1,6 +1,6 @@
-# GuidedQuad experimental 4-RoSy flow-field prototype (V0.2 branch)
+# GuidedQuad experimental 4-RoSy flow-field prototype (feature stacked on V0.3.9)
 
-This code is original C++17 with no external dependencies. It is a **direction solver**, **not yet a quad remesher**.
+This code is original C++17 with no external dependencies. It is a **direction solver**, **not an automatic global quad remesher**. The underlying V0.3.9 stack already supports constrained four-corner single-chart quad generation and guarded reprojection; the field is not yet coupled to the patch generator.
 
 ## Inputs and field representation
 
