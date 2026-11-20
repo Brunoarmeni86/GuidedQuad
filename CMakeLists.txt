@@ -43,6 +43,14 @@ if(BUILD_TESTING)
     guided-patch ${CMAKE_CURRENT_SOURCE_DIR}/tests/guide_square.txt
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/curved_surface.obj
     ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_trial_unprojected.obj 8 8 0)
+  add_test(NAME guidedquad_trial_patch_cli COMMAND guidedquad_cli
+    guided-patch ${CMAKE_CURRENT_SOURCE_DIR}/tests/guide_square.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/square.obj
+    ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_trial_direct.obj 8 8 0)
+  add_test(NAME guidedquad_trial_project_cli COMMAND guidedquad_cli
+    guided-patch ${CMAKE_CURRENT_SOURCE_DIR}/tests/guide_square.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/curved_surface.obj
+    ${CMAKE_CURRENT_BINARY_DIR}/guidedquad_trial_curved.obj 8 8 2)
   add_test(NAME guidedquad_collision_cli_clean COMMAND guidedquad_cli
     check-quads ${CMAKE_CURRENT_SOURCE_DIR}/tests/separated_quads.obj)
   add_test(NAME guidedquad_collision_cli_crossing COMMAND guidedquad_cli
