@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+id = "guidedquad_trial"
+version = "0.3.9"
+name = "GuidedQuad Trial + Tracker"
+tagline = "Four-curve quad patches with local diagnostic reports"
+maintainer = "GuidedQuad contributors"
+type = "add-on"
+tags = ["Modeling", "Mesh"]
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+
+[permissions]
+files = "Read local geometry and an installed native engine, write temporary OBJ files and local JSON reports"

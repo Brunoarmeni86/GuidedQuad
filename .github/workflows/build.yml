@@ -24,6 +24,47 @@ jobs:
         run: cmake --build build --config ${{ matrix.build_type }} --parallel
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+      - name: Package GuidedQuad trial native CLI (Windows)
+        if: matrix.os == 'windows-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guidedquad-trial-cli-windows-x64
+          path: build/Release/guidedquad_cli.exe
+          if-no-files-found: error
+          retention-days: 30
+      - name: Package GuidedQuad trial native CLI (Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guidedquad-trial-cli-linux-x64
+          path: build/guidedquad_cli
+          if-no-files-found: error
+          retention-days: 30
+      - name: Validate Blender addon Python
+        run: python -m compileall -q blender/guidedquad_trial
+      - name: Test addon tracker and guide interchange
+        run: python -m unittest discover -s blender/tests -v
+      - name: Build Blender addon ZIP
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: python scripts/package_blender_trial.py
+      - name: Upload installable Blender trial addon
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guidedquad-blender-trial-v039
+          path: dist/guidedquad_trial_v0.3.9.zip
+          if-no-files-found: error
+      - name: Upload native engine for Blender trial
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guidedquad-cli-${{ matrix.os }}
+          path: |
+            build/guidedquad_cli
+            build/Release/guidedquad_cli
+            build/Release/guidedquad_cli.exe
+          if-no-files-found: error
+
       - name: Solver quality comparison (reference case)
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         run: ctest --test-dir build -C Release -V -R "^guidedquad_patch$"

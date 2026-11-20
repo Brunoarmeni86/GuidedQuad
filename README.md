@@ -2,9 +2,9 @@
 
 **Independent, constraint-first quadrangulation engine — experimental V0.3 branch**
 
-GuidedQuad aims to produce precise, controllable all-quad retopology from artist-defined flow, hard boundaries and local density. The engine is designed to run independently of any custom Blender build. A stock Blender extension is planned, but **not yet implemented**.
+GuidedQuad aims to produce controllable all-quad retopology from artist-defined guides, hard boundaries and local density. Its C++ engine runs independently of any custom Blender build. This experimental branch now includes an **installable Blender trial extension and a local JSON tracker**, supporting one guided four-sided patch, not whole-mesh automatic remeshing.
 
-> **Current status:** `main` is the V0.1 guide extractor. This experimental branch contains V0.2 constrained four-sided all-quad patches plus V0.3 guarded BVH surface reprojection. It is **not an automatic remesher** for arbitrary meshes; no installable Blender addon yet.
+> **Current status:** `main` remains the V0.1 guide extractor. This experimental stacked branch includes constrained four-sided patches, guarded BVH reprojection, collision checker optimizations, and a **V0.3.9 installable Blender trial** with a native CLI executable delivered separately. It is **not yet an automatic remesher** for arbitrary meshes.
 
 ## What works now
 
@@ -17,6 +17,19 @@ GuidedQuad aims to produce precise, controllable all-quad retopology from artist
 - Generate real quad faces within one four-sided guide patch, with hard corner preservation.
 - Optionally project only the patch interior onto a source triangulated surface using a CPU BVH with inversion guard and backtracking.
 - Unit tests and an end-to-end projected OBJ export under `tests/`.
+
+## Blender trial and diagnostics (V0.3.9 branch)
+
+**[Installation, guide setup, one-click demo and report instructions](blender/README.md).** The experiment ships as a Blender 4.2+ Python extension plus a separately compiled `guidedquad_cli` binary. GitHub Actions packages an inner `guidedquad_trial_v0.3.9.zip` (install via *Get Extensions → Install from Disk*) and uploads Windows/macOS/Linux native CLI executables. The extension supports four separate open POLY/BEZIER curve objects, optional reprojection onto an evaluated mesh, quad collision verification and a **local JSON report** on both successful and failed attempts. It has a **Create Demo Patch** helper.
+
+You can also build the extension ZIP yourself:
+
+```sh
+python scripts/package_blender_trial.py
+python -m unittest discover -s blender/tests -v
+```
+
+**Caveat:** Python tracker, native CLI and geometry tests run in CI. Interactive Blender integration still needs real-world testing. The trial does **not** transfer UVs/polypaint or generate a complete quad mesh automatically.
 
 ## Build and test
 
