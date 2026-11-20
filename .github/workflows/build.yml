@@ -51,8 +51,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         uses: actions/upload-artifact@v4
         with:
-          name: guidedquad-blender-trial-v039
-          path: dist/guidedquad_trial_v0.3.9.zip
+          name: guidedquad-blender-trial-v0310
+          path: dist/guidedquad_trial_v0.3.10.zip
           if-no-files-found: error
       - name: Upload native engine for Blender trial
         if: matrix.build_type == 'Release'
